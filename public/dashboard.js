@@ -17,10 +17,39 @@ function fmtTime(dt) {
   }
 }
 
+function isSameDay(a, b) {
+  const da = new Date(a);
+  const db = new Date(b);
+  return (
+    da.getFullYear() === db.getFullYear() &&
+    da.getMonth() === db.getMonth() &&
+    da.getDate() === db.getDate()
+  );
+}
+
+function fmtDateTime(dt) {
+  const d = new Date(dt);
+  return d.toLocaleString([], {
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+
 function fmtRange(fromDate, toDate) {
   if (!fromDate || !toDate) return "";
-  return `${fmtTime(fromDate)}–${fmtTime(toDate)}`;
+
+  // If reservation is today, show time only
+  if (isSameDay(fromDate, new Date())) {
+    return `${fmtTime(fromDate)}–${fmtTime(toDate)}`;
+  }
+
+  // Otherwise, show date + time
+  return `${fmtDateTime(fromDate)}–${fmtTime(toDate)}`;
 }
+
 
 function escapeHtml(s) {
   return String(s || "")
