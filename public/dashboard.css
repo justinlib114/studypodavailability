@@ -1,3 +1,4 @@
+<style>
 body {
   font-family: Arial, sans-serif;
   margin: 0;
@@ -34,7 +35,7 @@ body {
   padding: 6px 8px;
   border: 1px solid #bbb;
   border-radius: 6px;
-  min-width: 120px;
+  min-width: 160px;
 }
 
 .controls button {
@@ -77,3 +78,4 @@ main {
 
 .available { color: #1b7f2a; font-weight: bold; }
 .reserved { color: #b00020; font-weight: bold; }
+</style>
