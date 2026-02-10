@@ -19,11 +19,13 @@
         Auto-refresh (sec)
         <input id="autorefresh" type="number" min="10" max="600" value="60" />
       </label>
+
       <label>
         Grace (min)
         <input id="grace" type="number" min="0" max="120" value="10" />
       </label>
-      <button id="refresh">Refresh</button>
+
+      <button id="refresh" type="button">Refresh</button>
     </div>
   </header>
 
@@ -38,7 +40,7 @@
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="4" class="muted">Click Refresh.</td></tr>
+        <tr><td colspan="4" class="muted">Loading…</td></tr>
       </tbody>
     </table>
   </main>
