@@ -1,3 +1,5 @@
+let countdownTimer = null;
+
 function ymdToday() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -29,6 +31,36 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
+/* ============================
+   Countdown helpers
+============================ */
+function minutesUntil(isoEnd) {
+  const end = new Date(isoEnd).getTime();
+  const now = Date.now();
+  return Math.ceil((end - now) / 60000);
+}
+
+function renderCountdown() {
+  document.querySelectorAll("[data-endtime]").forEach((el) => {
+    const endIso = el.getAttribute("data-endtime");
+    const mins = minutesUntil(endIso);
+
+    if (mins <= 0) {
+      el.textContent = "Ended";
+      el.className = "muted";
+    } else if (mins === 1) {
+      el.textContent = "Ends in 1 min";
+      el.className = "reserved";
+    } else {
+      el.textContent = `Ends in ${mins} min`;
+      el.className = "reserved";
+    }
+  });
+}
+
+/* ============================
+   Main load
+============================ */
 async function loadData() {
   const tbody = document.getElementById("rows");
   const meta = document.getElementById("meta");
@@ -40,6 +72,12 @@ async function loadData() {
   const end = endEl?.value || start;
 
   tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
+
+  // Stop any previous countdown loop
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
 
   try {
     const url = `/api/pods-status?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
@@ -56,7 +94,7 @@ async function loadData() {
     meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
 
     if (!data.results || !data.results.length) {
-      tbody.innerHTML = `<tr><td colspan="4" class="muted">No pods returned (check location/category IDs).</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="4" class="muted">No pods returned.</td></tr>`;
       return;
     }
 
@@ -65,14 +103,23 @@ async function loadData() {
         const isAvail = p.status === "Available";
         const statusClass = isAvail ? "available" : "reserved";
 
-        const current = p.active
-          ? `${p.active.patron ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>` : ""}${escapeHtml(
-              fmtRange(p.active.fromDate, p.active.toDate)
-            )}`
-          : `<span class="muted">—</span>`;
+        let current = `<span class="muted">—</span>`;
+
+        if (p.active) {
+          const range = escapeHtml(fmtRange(p.active.fromDate, p.active.toDate));
+          const patron = p.active.patron
+            ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
+            : "";
+
+          current = `
+            ${patron}
+            ${range}<br/>
+            <span data-endtime="${p.active.toDate}" class="reserved"></span>
+          `;
+        }
 
         const next = p.next
-          ? `${escapeHtml(fmtRange(p.next.fromDate, p.next.toDate))}`
+          ? escapeHtml(fmtRange(p.next.fromDate, p.next.toDate))
           : `<span class="muted">—</span>`;
 
         return `
@@ -85,6 +132,11 @@ async function loadData() {
         `;
       })
       .join("");
+
+    // Initial countdown render + interval
+    renderCountdown();
+    countdownTimer = setInterval(renderCountdown, 30000);
+
   } catch (e) {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="4" class="error">${escapeHtml(e.message)}</td></tr>`;
@@ -93,7 +145,9 @@ async function loadData() {
 
 document.getElementById("refresh").addEventListener("click", loadData);
 
-// Default date pickers to today
+/* ============================
+   Init defaults
+============================ */
 (() => {
   const today = ymdToday();
   const startEl = document.getElementById("start");
