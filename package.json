@@ -1,7 +1,7 @@
 {
   "name": "study-pods-dashboard",
   "version": "1.0.0",
-  "description": "Staff dashboard showing today's LibCal Study Pod reservations (auto-expire + auto-refresh)",
+  "description": "Staff dashboard for Study Pod reservations (today only)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,7 +9,7 @@
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "express": "^4.19.2",
+    "express": "^5.0.1",
     "node-fetch": "^2.7.0"
   },
   "engines": {
