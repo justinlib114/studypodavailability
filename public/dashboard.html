@@ -3,26 +3,26 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1.0" />
-  <title>Study Pods — Today</title>
+  <title>Study Pods</title>
   <link rel="icon" href="data:," />
   <link rel="stylesheet" href="/dashboard.css" />
 </head>
 <body>
   <header class="header">
     <div>
-      <h1>Study Pods — Today</h1>
+      <h1>Study Pods</h1>
       <div id="meta" class="muted">—</div>
     </div>
 
     <div class="controls">
       <label>
-        Auto-refresh (sec)
-        <input id="autorefresh" type="number" min="10" max="600" value="60" />
+        Start date
+        <input id="start" type="date" />
       </label>
 
       <label>
-        Grace (min)
-        <input id="grace" type="number" min="0" max="120" value="10" />
+        End date
+        <input id="end" type="date" />
       </label>
 
       <button id="refresh" type="button">Refresh</button>
@@ -40,7 +40,7 @@
         </tr>
       </thead>
       <tbody id="rows">
-        <tr><td colspan="4" class="muted">Loading…</td></tr>
+        <tr><td colspan="4" class="muted">Choose dates and click Refresh.</td></tr>
       </tbody>
     </table>
   </main>
