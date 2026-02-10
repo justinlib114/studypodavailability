@@ -1,4 +1,4 @@
-// server.js — Study Pods Staff Dashboard (today-only + shows Available when not booked)
+// server.js — Study Pods Dashboard (date range + manual refresh, NO grace)
 const express = require("express");
 const fetch = require("node-fetch");
 const path = require("path");
@@ -11,6 +11,9 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.static("public"));
 
+// Keep ranges reasonable
+const MAX_RANGE_DAYS = 31;
+
 /* ============================
    Helpers
 ============================ */
@@ -21,15 +24,23 @@ function toYMD(d) {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-function parseIsoSafe(s) {
-  const d = new Date(s);
+function parseYMD(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s || ""));
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
   return isNaN(d.getTime()) ? null : d;
 }
 
-function clampInt(value, fallback, min, max) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, Math.floor(n)));
+function daysBetweenInclusive(startDate, endDate) {
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const a = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+  const b = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+  return Math.floor((b - a) / msPerDay) + 1;
+}
+
+function parseIsoSafe(s) {
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
 }
 
 async function getLibCalToken() {
@@ -73,9 +84,10 @@ app.get("/dashboard", (req, res) => {
 app.get("/ping", (req, res) => res.send("OK"));
 
 /* ============================
-   API: today's status for ALL pods
-   - shows Available when not booked "right now"
-   - stays Reserved until end + grace minutes
+   API: pods status for date range
+   - NO grace: immediately ends at toDate
+   - "current" = now >= start AND now < end
+   - "next" = first booking with start > now
 ============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
@@ -88,16 +100,29 @@ app.get("/api/pods-status", async (req, res) => {
       });
     }
 
-    const graceMinutes = clampInt(
-      req.query.grace,
-      Number(process.env.EXPIRE_GRACE_MINUTES || 10),
-      0,
-      120
-    );
-    const graceMs = graceMinutes * 60 * 1000;
+    const today = new Date();
+    const defaultStart = toYMD(today);
+    const defaultEnd = toYMD(today);
 
-    // date optional; defaults to today
-    const date = String(req.query.date || toYMD(new Date()));
+    const startRaw = req.query.start || defaultStart;
+    const endRaw = req.query.end || defaultEnd;
+
+    const startDate = parseYMD(startRaw);
+    const endDate = parseYMD(endRaw);
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "Invalid start/end. Use YYYY-MM-DD." });
+    }
+    if (endDate < startDate) {
+      return res.status(400).json({ error: "End date must be on/after start date." });
+    }
+
+    const rangeDays = daysBetweenInclusive(startDate, endDate);
+    if (rangeDays > MAX_RANGE_DAYS) {
+      return res.status(400).json({
+        error: `Date range too large. Max is ${MAX_RANGE_DAYS} days.`,
+      });
+    }
 
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
@@ -130,7 +155,7 @@ app.get("/api/pods-status", async (req, res) => {
       if (pageIndex > 20) break; // safety
     }
 
-    // 2) Fetch today's bookings for lid+cid
+    // 2) Fetch bookings for the whole range in one call:
     const bookings = [];
     let page = 1;
 
@@ -138,8 +163,8 @@ app.get("/api/pods-status", async (req, res) => {
       const bookParams = new URLSearchParams({
         lid: String(lid),
         cid: String(cid),
-        date,
-        days: "0",
+        date: toYMD(startDate),
+        days: String(rangeDays - 1),
         limit: "500",
         page: String(page),
         include_cancel: "0",
@@ -167,7 +192,7 @@ app.get("/api/pods-status", async (req, res) => {
 
     const now = new Date();
 
-    // group bookings by space eid
+    // group bookings by pod eid
     const byEid = new Map();
     for (const b of bookings) {
       if (!b) continue;
@@ -190,30 +215,27 @@ app.get("/api/pods-status", async (req, res) => {
       });
     }
 
-    // sort each list by start time
     for (const [eid, list] of byEid.entries()) {
       list.sort((a, b) => a.start.getTime() - b.start.getTime());
       byEid.set(eid, list);
     }
 
-    // compute status per pod
     const results = items
       .map((it) => {
         const eid = it.id != null ? Number(it.id) : null;
         const name = it.name || "(Unnamed pod)";
         const list = eid != null ? byEid.get(eid) || [] : [];
 
+        // CURRENT (no grace): start <= now < end
         let active = null;
         for (const bk of list) {
-          if (
-            now.getTime() >= bk.start.getTime() &&
-            now.getTime() <= bk.end.getTime() + graceMs
-          ) {
+          if (now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
             active = bk;
             break;
           }
         }
 
+        // NEXT: first booking whose start > now
         let next = null;
         for (const bk of list) {
           if (bk.start.getTime() > now.getTime()) {
@@ -235,8 +257,7 @@ app.get("/api/pods-status", async (req, res) => {
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({
-      date,
-      graceMinutes,
+      range: { start: toYMD(startDate), end: toYMD(endDate), days: rangeDays },
       now: now.toISOString(),
       count: results.length,
       results,
