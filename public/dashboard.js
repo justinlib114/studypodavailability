@@ -145,6 +145,9 @@ async function loadData() {
 
 document.getElementById("refresh").addEventListener("click", loadData);
 
+// Load immediately on first open (defaults to today's date range already in the inputs)
+window.addEventListener("DOMContentLoaded", loadData);
+
 /* ============================
    Init defaults
 ============================ */
