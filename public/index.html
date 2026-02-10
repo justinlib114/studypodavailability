@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Study Pods – Today</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>Study Pods – Today</h1>
+      <div id="meta" class="muted">Loading…</div>
+    </div>
+
+    <div class="controls">
+      <label>
+        Grace (min)
+        <input id="grace" type="number" min="0" max="60" value="10" />
+      </label>
+
+      <label>
+        Refresh (sec)
+        <input id="refreshSec" type="number" min="10" max="600" value="60" />
+      </label>
+
+      <button id="refreshBtn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Pod</th>
+          <th>Patron</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="4" class="muted">Loading…</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
