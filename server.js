@@ -62,32 +62,20 @@ async function getLibCalToken() {
 }
 
 /* ============================
-   Routes
+   Pages
 ============================ */
-app.get("/", (req, res) => {
-  res.redirect("/dashboard");
-});
+app.get("/", (req, res) => res.redirect("/dashboard"));
 
 app.get("/dashboard", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "dashboard.html"));
 });
 
-// Optional: if you want a token endpoint for debugging (not required by dashboard)
-app.get("/token", async (req, res) => {
-  try {
-    const token = await getLibCalToken();
-    res.json({ token });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Failed to obtain token", detail: String(e.message || e) });
-  }
-});
+app.get("/ping", (req, res) => res.send("OK"));
 
 /* ============================
-   Core API: current status for ALL pods
-   - today bookings only
-   - shows Available when not currently booked
-   - flips back to Available after end + grace minutes
+   API: today's status for ALL pods
+   - shows Available when not booked "right now"
+   - stays Reserved until end + grace minutes
 ============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
@@ -100,24 +88,28 @@ app.get("/api/pods-status", async (req, res) => {
       });
     }
 
-    const graceMinutes = clampInt(req.query.grace, Number(process.env.EXPIRE_GRACE_MINUTES || 10), 0, 120);
+    const graceMinutes = clampInt(
+      req.query.grace,
+      Number(process.env.EXPIRE_GRACE_MINUTES || 10),
+      0,
+      120
+    );
     const graceMs = graceMinutes * 60 * 1000;
 
-    // date is optional; defaults today (server local time)
+    // date optional; defaults to today
     const date = String(req.query.date || toYMD(new Date()));
 
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
-    // 1) Fetch spaces/items in this location+category
-    //    NOTE: /space/items/{lid} supports category_id and visibility
-    //    page_size max 100; loop pages just in case
+    // 1) Fetch pods (space items) in location+category
     const items = [];
     let pageIndex = 0;
+
     while (true) {
       const itemsParams = new URLSearchParams({
         category_id: String(cid),
-        visibility: "admin_only", // staff view
+        visibility: "admin_only",
         page_size: "100",
         page_index: String(pageIndex),
       });
@@ -133,16 +125,15 @@ app.get("/api/pods-status", async (req, res) => {
       const chunk = await itemsResp.json();
       if (Array.isArray(chunk)) items.push(...chunk);
 
-      // If fewer than page_size, we’re done
       if (!Array.isArray(chunk) || chunk.length < 100) break;
       pageIndex++;
       if (pageIndex > 20) break; // safety
     }
 
-    // 2) Fetch today's bookings for this lid+cid
-    //    Use /space/bookings and filter to Confirmed
+    // 2) Fetch today's bookings for lid+cid
     const bookings = [];
     let page = 1;
+
     while (true) {
       const bookParams = new URLSearchParams({
         lid: String(lid),
@@ -155,8 +146,6 @@ app.get("/api/pods-status", async (req, res) => {
         include_denied: "0",
         include_tentative: "0",
         include_remote: "0",
-        // You *can* set check_in_status=1 if you want that field returned,
-        // but we don't actually need it for "Available vs Reserved" right now.
         check_in_status: "0",
       });
 
@@ -171,7 +160,6 @@ app.get("/api/pods-status", async (req, res) => {
       const chunk = await bookingsResp.json();
       if (Array.isArray(chunk)) bookings.push(...chunk);
 
-      // paginate: if chunk size hits limit, there *might* be more
       if (!Array.isArray(chunk) || chunk.length < 500) break;
       page++;
       if (page > 20) break; // safety
@@ -194,13 +182,11 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!byEid.has(eid)) byEid.set(eid, []);
       byEid.get(eid).push({
-        eid,
-        fromDate: b.fromDate,
-        toDate: b.toDate,
         start,
         end,
+        fromDate: b.fromDate,
+        toDate: b.toDate,
         patron: `${b.firstName || ""} ${b.lastName || ""}`.trim(),
-        email: b.email || "",
       });
     }
 
@@ -210,24 +196,24 @@ app.get("/api/pods-status", async (req, res) => {
       byEid.set(eid, list);
     }
 
-    // compute per pod: active booking (now between start and end+grace), else available
+    // compute status per pod
     const results = items
       .map((it) => {
         const eid = it.id != null ? Number(it.id) : null;
         const name = it.name || "(Unnamed pod)";
+        const list = eid != null ? byEid.get(eid) || [] : [];
 
-        const list = eid != null ? (byEid.get(eid) || []) : [];
-
-        // active = now >= start && now <= end + grace
         let active = null;
         for (const bk of list) {
-          if (now.getTime() >= bk.start.getTime() && now.getTime() <= (bk.end.getTime() + graceMs)) {
+          if (
+            now.getTime() >= bk.start.getTime() &&
+            now.getTime() <= bk.end.getTime() + graceMs
+          ) {
             active = bk;
             break;
           }
         }
 
-        // next booking (optional — helpful context)
         let next = null;
         for (const bk of list) {
           if (bk.start.getTime() > now.getTime()) {
@@ -241,18 +227,9 @@ app.get("/api/pods-status", async (req, res) => {
           name,
           status: active ? "Reserved" : "Available",
           active: active
-            ? {
-                patron: active.patron || "",
-                fromDate: active.fromDate,
-                toDate: active.toDate,
-              }
+            ? { patron: active.patron || "", fromDate: active.fromDate, toDate: active.toDate }
             : null,
-          next: next
-            ? {
-                fromDate: next.fromDate,
-                toDate: next.toDate,
-              }
-            : null,
+          next: next ? { fromDate: next.fromDate, toDate: next.toDate } : null,
         };
       })
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -272,8 +249,6 @@ app.get("/api/pods-status", async (req, res) => {
     });
   }
 });
-
-app.get("/ping", (req, res) => res.send("OK"));
 
 app.listen(port, () => {
   console.log(`Study Pods dashboard listening on http://localhost:${port}`);
