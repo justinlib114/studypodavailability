@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+  <title>Study Pods — Today</title>
+  <link rel="icon" href="data:," />
+  <link rel="stylesheet" href="/dashboard.css" />
+</head>
+<body>
+  <header class="header">
+    <div>
+      <h1>Study Pods — Today</h1>
+      <div id="meta" class="muted">—</div>
+    </div>
+
+    <div class="controls">
+      <label>
+        Auto-refresh (sec)
+        <input id="autorefresh" type="number" min="10" max="600" value="60" />
+      </label>
+      <label>
+        Grace (min)
+        <input id="grace" type="number" min="0" max="120" value="10" />
+      </label>
+      <button id="refresh">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Pod</th>
+          <th>Status</th>
+          <th>Current Reservation</th>
+          <th>Next Reservation</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="4" class="muted">Click Refresh.</td></tr>
+      </tbody>
+    </table>
+  </main>
+
+  <script src="/dashboard.js"></script>
+</body>
+</html>
