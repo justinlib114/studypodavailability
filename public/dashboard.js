@@ -20,7 +20,6 @@ async function loadData() {
   const graceEl = document.getElementById("grace");
 
   const grace = graceEl ? graceEl.value : "10";
-
   tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
 
   try {
@@ -48,7 +47,10 @@ async function loadData() {
         const statusClass = isAvail ? "available" : "reserved";
 
         const current = p.active
-          ? `${p.active.patron ? `<strong>${p.active.patron}</strong><br/>` : ""}${fmtRange(p.active.fromDate, p.active.toDate)}`
+          ? `${p.active.patron ? `<strong>${p.active.patron}</strong><br/>` : ""}${fmtRange(
+              p.active.fromDate,
+              p.active.toDate
+            )}`
           : `<span class="muted">—</span>`;
 
         const next = p.next
@@ -81,12 +83,8 @@ function startAutoRefresh() {
   timer = setInterval(loadData, Math.max(10, seconds) * 1000);
 }
 
-document.getElementById("refresh").addEventListener("click", () => {
-  loadData();
-});
-
+document.getElementById("refresh").addEventListener("click", loadData);
 document.getElementById("autorefresh").addEventListener("change", startAutoRefresh);
 
-// Optional: load immediately
 loadData();
 startAutoRefresh();
