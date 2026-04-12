@@ -1,17 +1,28 @@
-// server.js — Study Pods Dashboard (date range + manual refresh, NO grace)
+// server.js — Study Pods Dashboard
+// Includes:
+// - date range view
+// - active / next reservations
+// - patron name
+// - account / library card number
+// - check-in / check-out buttons
+// - route guard using DASHBOARD_ADMIN_KEY
+
 const express = require("express");
 const fetch = require("node-fetch");
 const path = require("path");
+const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+app.disable("x-powered-by");
 app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
-// Keep ranges reasonable
 const MAX_RANGE_DAYS = 31;
 
 /* ============================
@@ -33,8 +44,16 @@ function parseYMD(s) {
 
 function daysBetweenInclusive(startDate, endDate) {
   const msPerDay = 24 * 60 * 60 * 1000;
-  const a = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
-  const b = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
+  const a = new Date(
+    startDate.getFullYear(),
+    startDate.getMonth(),
+    startDate.getDate()
+  ).getTime();
+  const b = new Date(
+    endDate.getFullYear(),
+    endDate.getMonth(),
+    endDate.getDate()
+  ).getTime();
   return Math.floor((b - a) / msPerDay) + 1;
 }
 
@@ -51,6 +70,7 @@ async function getLibCalToken() {
   }
 
   const tokenUrl = "https://greenburghlibrary.libcal.com/1.1/oauth/token";
+
   const body = new URLSearchParams({
     client_id: CLIENT_ID_PHYSICAL,
     client_secret: CLIENT_SECRET_PHYSICAL,
@@ -72,22 +92,128 @@ async function getLibCalToken() {
   return data.access_token;
 }
 
+async function libCalPost(endpoint, params) {
+  const token = await getLibCalToken();
+
+  const url = `https://greenburghlibrary.libcal.com/1.1${endpoint}?${new URLSearchParams(params).toString()}`;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  const text = await resp.text();
+
+  let data;
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!resp.ok) {
+    throw new Error(`${endpoint} error: ${resp.status} ${resp.statusText} - ${text}`);
+  }
+
+  return data;
+}
+
+function requireDashboardKey(req, res, next) {
+  const expected = String(process.env.DASHBOARD_ADMIN_KEY || "").trim();
+  const provided = String(req.get("x-dashboard-key") || "").trim();
+
+  if (!expected) {
+    return res.status(500).json({ error: "Missing DASHBOARD_ADMIN_KEY in env" });
+  }
+
+  if (!provided || provided !== expected) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  next();
+}
+
 /* ============================
    Pages
 ============================ */
 app.get("/", (req, res) => res.redirect("/dashboard"));
 
 app.get("/dashboard", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "dashboard.html"));
+  const dashboardPath = path.join(__dirname, "public", "dashboard.html");
+  let html = fs.readFileSync(dashboardPath, "utf8");
+
+  html = html.replace(
+    "</body>",
+    `
+    <script>
+      window.DASHBOARD_ADMIN_KEY = ${JSON.stringify(process.env.DASHBOARD_ADMIN_KEY || "")};
+    </script>
+    </body>`
+  );
+
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(html);
 });
 
 app.get("/ping", (req, res) => res.send("OK"));
 
 /* ============================
+   API: Check in / Check out
+============================ */
+app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
+  try {
+    const id = String(req.body.id || "").trim();
+    const code = String(req.body.code || "").trim();
+
+    if (!id || !code) {
+      return res.status(400).json({ error: "Missing booking id or check-in code." });
+    }
+
+    const data = await libCalPost("/space/checkin", { id, code });
+
+    console.log(`[CHECKIN] booking ${id} at ${new Date().toISOString()}`);
+
+    res.json({ ok: true, action: "checkin", data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({
+      error: "Check-in failed",
+      detail: String(e.message || e),
+    });
+  }
+});
+
+app.post("/api/booking/checkout", requireDashboardKey, async (req, res) => {
+  try {
+    const id = String(req.body.id || "").trim();
+    const code = String(req.body.code || "").trim();
+
+    if (!id) {
+      return res.status(400).json({ error: "Missing booking id." });
+    }
+
+    const params = { id };
+    if (code) params.code = code;
+
+    const data = await libCalPost("/space/checkout", params);
+
+    console.log(`[CHECKOUT] booking ${id} at ${new Date().toISOString()}`);
+
+    res.json({ ok: true, action: "checkout", data });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({
+      error: "Check-out failed",
+      detail: String(e.message || e),
+    });
+  }
+});
+
+/* ============================
    API: pods status for date range
-   - NO grace: immediately ends at toDate
-   - "current" = now >= start AND now < end
-   - "next" = first booking with start > now
 ============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
@@ -113,6 +239,7 @@ app.get("/api/pods-status", async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ error: "Invalid start/end. Use YYYY-MM-DD." });
     }
+
     if (endDate < startDate) {
       return res.status(400).json({ error: "End date must be on/after start date." });
     }
@@ -127,7 +254,9 @@ app.get("/api/pods-status", async (req, res) => {
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
-    // 1) Fetch pods (space items) in location+category
+    /* ============================
+       1) Fetch space items
+    ============================= */
     const items = [];
     let pageIndex = 0;
 
@@ -152,10 +281,12 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 100) break;
       pageIndex++;
-      if (pageIndex > 20) break; // safety
+      if (pageIndex > 20) break;
     }
 
-    // 2) Fetch bookings for the whole range in one call:
+    /* ============================
+       2) Fetch bookings
+    ============================= */
     const bookings = [];
     let page = 1;
 
@@ -171,7 +302,7 @@ app.get("/api/pods-status", async (req, res) => {
         include_denied: "0",
         include_tentative: "0",
         include_remote: "0",
-        check_in_status: "0",
+        check_in_status: "1",
       });
 
       const bookingsUrl = `https://greenburghlibrary.libcal.com/1.1/space/bookings?${bookParams.toString()}`;
@@ -187,13 +318,16 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 500) break;
       page++;
-      if (page > 20) break; // safety
+      if (page > 20) break;
     }
 
     const now = new Date();
 
-    // group bookings by pod eid
+    /* ============================
+       Group bookings by pod eid
+    ============================= */
     const byEid = new Map();
+
     for (const b of bookings) {
       if (!b) continue;
       if (String(b.status || "").toLowerCase() !== "confirmed") continue;
@@ -206,7 +340,13 @@ app.get("/api/pods-status", async (req, res) => {
       if (!start || !end) continue;
 
       if (!byEid.has(eid)) byEid.set(eid, []);
+
       byEid.get(eid).push({
+        bookingId: b.id != null ? String(b.id) : "",
+        bookId: b.bookId || "",
+        checkInCode: b.check_in_code || "",
+        checkInStatus: b.check_in_status || "-",
+        account: b.account || "",
         start,
         end,
         fromDate: b.fromDate,
@@ -226,7 +366,6 @@ app.get("/api/pods-status", async (req, res) => {
         const name = it.name || "(Unnamed pod)";
         const list = eid != null ? byEid.get(eid) || [] : [];
 
-        // CURRENT (no grace): start <= now < end
         let active = null;
         for (const bk of list) {
           if (now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
@@ -235,7 +374,6 @@ app.get("/api/pods-status", async (req, res) => {
           }
         }
 
-        // NEXT: first booking whose start > now
         let next = null;
         for (const bk of list) {
           if (bk.start.getTime() > now.getTime()) {
@@ -249,15 +387,33 @@ app.get("/api/pods-status", async (req, res) => {
           name,
           status: active ? "Reserved" : "Available",
           active: active
-            ? { patron: active.patron || "", fromDate: active.fromDate, toDate: active.toDate }
+            ? {
+                bookingId: active.bookingId,
+                bookId: active.bookId,
+                checkInCode: active.checkInCode,
+                checkInStatus: active.checkInStatus,
+                account: active.account || "",
+                patron: active.patron || "",
+                fromDate: active.fromDate,
+                toDate: active.toDate,
+              }
             : null,
-          next: next ? { fromDate: next.fromDate, toDate: next.toDate } : null,
+          next: next
+            ? {
+                fromDate: next.fromDate,
+                toDate: next.toDate,
+              }
+            : null,
         };
       })
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({
-      range: { start: toYMD(startDate), end: toYMD(endDate), days: rangeDays },
+      range: {
+        start: toYMD(startDate),
+        end: toYMD(endDate),
+        days: rangeDays,
+      },
       now: now.toISOString(),
       count: results.length,
       results,
