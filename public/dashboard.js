@@ -234,8 +234,16 @@ if (rawStatus === "in") {
   statusClass = "checkin-none";
 }
 
-          const canCheckIn = rawStatus !== "in";
-          const canCheckOut = rawStatus === "in";
+         const nowMs = Date.now();
+const startMs = new Date(p.active.fromDate).getTime();
+const endMs = new Date(p.active.toDate).getTime();
+const reservationStillActive = nowMs >= startMs && nowMs < endMs;
+
+// Only allow Check In while reservation is still in progress and not already checked in
+const canCheckIn = reservationStillActive && rawStatus !== "in" && rawStatus !== "out";
+
+// Only allow Check Out while reservation is checked in
+const canCheckOut = rawStatus === "in";
 
           const checkInBtn = canCheckIn
             ? `
