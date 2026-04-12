@@ -13,8 +13,15 @@ body {
   margin-bottom: 12px;
 }
 
-h1 { margin: 0 0 4px 0; font-size: 20px; }
-.muted { color: #666; font-size: 13px; }
+h1 {
+  margin: 0 0 4px 0;
+  font-size: 20px;
+}
+
+.muted {
+  color: #666;
+  font-size: 13px;
+}
 
 .controls {
   display: flex;
@@ -23,20 +30,30 @@ h1 { margin: 0 0 4px 0; font-size: 20px; }
   align-items: flex-end;
 }
 
-label { display: flex; flex-direction: column; font-size: 12px; gap: 4px; }
-input, button {
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+}
+
+input,
+button {
   padding: 7px 10px;
   font-size: 14px;
 }
 
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+}
 
 .table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.table th, .table td {
+.table th,
+.table td {
   border: 1px solid #ddd;
   padding: 8px;
   vertical-align: top;
@@ -47,14 +64,69 @@ button { cursor: pointer; }
   text-align: left;
 }
 
-.today {
-  font-weight: 700;
-}
-
 .error {
   color: #b00020;
 }
 
-/* ===== Added for pod status + countdown labels ===== */
-.available { color: green; font-weight: 700; }
-.reserved  { color: #b00020; font-weight: 700; }
+.available {
+  color: green;
+  font-weight: 700;
+}
+
+.reserved {
+  color: #b00020;
+  font-weight: 700;
+}
+
+.account-number {
+  display: inline-block;
+  font-size: 13px;
+  color: #333;
+}
+
+.checkin-state {
+  display: inline-block;
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.action-wrap {
+  margin-top: 8px;
+}
+
+.action-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.btn-action {
+  border: 1px solid #bbb;
+  background: #f7f7f7;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.btn-action:hover {
+  background: #ececec;
+}
+
+.btn-action:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+.action-message {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.success {
+  color: green;
+}
+
+.error-text {
+  color: #b00020;
+}
