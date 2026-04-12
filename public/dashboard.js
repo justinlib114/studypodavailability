@@ -215,9 +215,9 @@ async function loadData() {
             ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
             : "";
 
-          const account = p.active.account
-            ? `<span class="account-number">${escapeHtml(p.active.account)}</span><br/>`
-            : "";
+        const account = p.active.account
+  ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
+  : "";
 
           const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
 let statusLabel = "Not checked in";
