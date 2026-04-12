@@ -80,7 +80,7 @@ button {
 
 .account-number {
   display: block;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 600;
   margin-bottom: 0;
   color: #222;
@@ -89,7 +89,7 @@ button {
 .checkin-state {
   display: block;
   margin-top: 6px;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
 }
 
