@@ -7,6 +7,7 @@
 // - check-in / check-out buttons
 // - route guard using DASHBOARD_ADMIN_KEY
 // - auto-checkout of previous checked-in reservation on same pod before checking in current one
+// - 15-minute grace display after reservation ends, unless another reservation starts within that grace window
 
 const express = require("express");
 const fetch = require("node-fetch");
@@ -25,6 +26,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
 const MAX_RANGE_DAYS = 31;
+const ENDED_GRACE_MINUTES = 15;
 
 /* ============================
    Helpers
@@ -61,6 +63,10 @@ function daysBetweenInclusive(startDate, endDate) {
 function parseIsoSafe(s) {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
+}
+
+function addMinutes(date, minutes) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 async function getLibCalToken() {
@@ -221,7 +227,6 @@ async function findBookingById(bookingId) {
 
   const today = new Date();
 
-  // Search today + next 7 days first
   let bookings = await fetchBookingsForRange({
     lid,
     cid,
@@ -232,7 +237,6 @@ async function findBookingById(bookingId) {
   let found = bookings.find((b) => String(b.id) === String(bookingId));
   if (found) return found;
 
-  // Fallback: search yesterday through next 7 days in case timing is odd
   const yesterday = new Date(today);
   yesterday.setDate(yesterday.getDate() - 1);
 
@@ -262,7 +266,6 @@ async function findPreviousCheckedInBooking(currentBooking) {
   const currentStart = parseIsoSafe(currentBooking.fromDate);
   if (!currentStart) return null;
 
-  // Pull a small window around the current booking date for the same pod
   const searchStart = new Date(currentStart);
   searchStart.setDate(searchStart.getDate() - 1);
 
@@ -569,10 +572,32 @@ app.get("/api/pods-status", async (req, res) => {
         const list = eid != null ? byEid.get(eid) || [] : [];
 
         let active = null;
-        for (const bk of list) {
-          if (now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
+
+        for (let i = 0; i < list.length; i++) {
+          const bk = list[i];
+          const nextBk = list[i + 1] || null;
+
+          const nowMs = now.getTime();
+          const startMs = bk.start.getTime();
+          const endMs = bk.end.getTime();
+          const graceEndMs = addMinutes(bk.end, ENDED_GRACE_MINUTES).getTime();
+
+          // Normal active reservation
+          if (nowMs >= startMs && nowMs < endMs) {
             active = bk;
             break;
+          }
+
+          // Grace period after reservation ends, but only if the next booking
+          // does not start within that grace window
+          if (nowMs >= endMs && nowMs < graceEndMs) {
+            const nextStartsWithinGrace =
+              nextBk && nextBk.start.getTime() <= graceEndMs;
+
+            if (!nextStartsWithinGrace) {
+              active = bk;
+              break;
+            }
           }
         }
 
