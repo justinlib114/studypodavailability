@@ -19,8 +19,12 @@ h1 {
 }
 
 .muted {
-  color: #666;
-  font-size: 13px;
+  color: #c62828;
+  font-size: 16px;
+}
+
+span.muted {
+    font-weight: 700;
 }
 
 .controls {
