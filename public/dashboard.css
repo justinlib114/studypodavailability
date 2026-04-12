@@ -80,9 +80,9 @@ button {
 
 .account-number {
   display: block;
-  font-size: 14px; /* match table text */
+  font-size: 14px;
   font-weight: 600;
-  margin-bottom: 2px;
+  margin-bottom: 0;
   color: #222;
 }
 
