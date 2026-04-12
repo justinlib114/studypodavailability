@@ -347,15 +347,9 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
 
     if (previousBooking) {
       const previousId = String(previousBooking.id || "").trim();
-      const previousCode = String(previousBooking.check_in_code || "").trim();
 
       if (previousId) {
-        const checkoutParams = { id: previousId };
-        if (previousCode) {
-          checkoutParams.code = previousCode;
-        }
-
-        const checkoutData = await libCalPost("/space/checkout", checkoutParams);
+        const checkoutData = await libCalPost("/space/checkout", { id: previousId });
 
         autoCheckedOut = {
           bookingId: previousId,
@@ -394,16 +388,12 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
 app.post("/api/booking/checkout", requireDashboardKey, async (req, res) => {
   try {
     const id = String(req.body.id || "").trim();
-    const code = String(req.body.code || "").trim();
 
     if (!id) {
       return res.status(400).json({ error: "Missing booking id." });
     }
 
-    const params = { id };
-    if (code) params.code = code;
-
-    const data = await libCalPost("/space/checkout", params);
+    const data = await libCalPost("/space/checkout", { id });
 
     console.log(`[CHECKOUT] booking ${id} at ${new Date().toISOString()}`);
 
@@ -582,14 +572,11 @@ app.get("/api/pods-status", async (req, res) => {
           const endMs = bk.end.getTime();
           const graceEndMs = addMinutes(bk.end, ENDED_GRACE_MINUTES).getTime();
 
-          // Normal active reservation
           if (nowMs >= startMs && nowMs < endMs) {
             active = bk;
             break;
           }
 
-          // Grace period after reservation ends, but only if the next booking
-          // does not start within that grace window
           if (nowMs >= endMs && nowMs < graceEndMs) {
             const nextStartsWithinGrace =
               nextBk && nextBk.start.getTime() <= graceEndMs;
