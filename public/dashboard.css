@@ -117,19 +117,37 @@ button {
 }
 
 .btn-action {
-  border: 1px solid #bbb;
-  background: #f7f7f7;
   border-radius: 4px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   font-size: 13px;
+  font-weight: 700; /* bold */
+  border: none;
+  cursor: pointer;
 }
 
-.btn-action:hover {
-  background: #ececec;
+/* Check In button (green) */
+.btn-checkin {
+  background: #2e7d32;
+  color: white;
 }
 
+.btn-checkin:hover {
+  background: #256628;
+}
+
+/* Check Out button (red) */
+.btn-checkout {
+  background: #c62828;
+  color: white;
+}
+
+.btn-checkout:hover {
+  background: #a61f1f;
+}
+
+/* Disabled state */
 .btn-action:disabled {
-  opacity: 0.65;
+  opacity: 0.6;
   cursor: not-allowed;
 }
 
