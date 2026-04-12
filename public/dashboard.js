@@ -220,15 +220,19 @@ async function loadData() {
             : "";
 
           const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
-          let statusLabel = "Not checked in";
+let statusLabel = "Not checked in";
+let statusClass = "checkin-none";
 
-          if (rawStatus === "in") {
-            statusLabel = "Checked in";
-          } else if (rawStatus === "out") {
-            statusLabel = "Checked out";
-          } else if (rawStatus === "-") {
-            statusLabel = "Not checked in";
-          }
+if (rawStatus === "in") {
+  statusLabel = "Checked In";
+  statusClass = "checkin-in";
+} else if (rawStatus === "out") {
+  statusLabel = "Checked Out";
+  statusClass = "checkin-out";
+} else {
+  statusLabel = "Not Checked In";
+  statusClass = "checkin-none";
+}
 
           const canCheckIn = rawStatus !== "in";
           const canCheckOut = rawStatus === "in";
@@ -264,7 +268,7 @@ async function loadData() {
             ${account}
             ${range}<br/>
             <span data-endtime="${p.active.toDate}" class="reserved"></span><br/>
-            <span class="checkin-state">${escapeHtml(statusLabel)}</span>
+            <span class="checkin-state ${statusClass}">${escapeHtml(statusLabel)}</span>
             <div class="action-wrap">
               <div class="action-buttons">
                 ${checkInBtn}
