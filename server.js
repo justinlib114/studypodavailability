@@ -319,19 +319,30 @@ app.get("/api/pods-status", async (req, res) => {
         let last = null;
 
         for (const bk of list) {
-          if (!active && now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
+          const nowMs = now.getTime();
+          const startMs = bk.start.getTime();
+          const endMs = bk.end.getTime();
+          const isCheckedOut = bk.checkInStatus === "Checked Out";
+          const endedOrFormer = endMs <= nowMs || isCheckedOut;
+
+          if (
+            !active &&
+            nowMs >= startMs &&
+            nowMs < endMs &&
+            !isCheckedOut
+          ) {
             active = bk;
           }
 
-          if (!next && bk.start.getTime() > now.getTime()) {
+          if (!next && startMs > nowMs) {
             next = bk;
           }
 
           if (
-            bk.end.getTime() <= now.getTime() &&
+            endedOrFormer &&
             isSameLocalDay(bk.end, todayYmd)
           ) {
-            if (!last || bk.end.getTime() > last.end.getTime()) {
+            if (!last || endMs > last.end.getTime()) {
               last = bk;
             }
           }
