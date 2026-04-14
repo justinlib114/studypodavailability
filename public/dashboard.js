@@ -86,7 +86,7 @@ function renderCountdown() {
 /* ============================
    Check-in / Check-out actions
 ============================ */
-async function postBookingAction(action, bookingId, code, buttonEl) {
+async function postBookingAction(action, bookingId, buttonEl) {
   const originalText = buttonEl ? buttonEl.textContent : "";
   const actionCell = buttonEl ? buttonEl.closest(".action-wrap") : null;
   const msgEl = actionCell ? actionCell.querySelector(".action-message") : null;
@@ -110,7 +110,6 @@ async function postBookingAction(action, bookingId, code, buttonEl) {
       },
       body: JSON.stringify({
         id: bookingId,
-        code,
       }),
     });
 
@@ -146,16 +145,14 @@ function bindActionButtons() {
   document.querySelectorAll(".btn-checkin").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const bookingId = btn.getAttribute("data-booking-id");
-      const code = btn.getAttribute("data-code");
-      await postBookingAction("checkin", bookingId, code, btn);
+      await postBookingAction("checkin", bookingId, btn);
     });
   });
 
   document.querySelectorAll(".btn-checkout").forEach((btn) => {
     btn.addEventListener("click", async () => {
       const bookingId = btn.getAttribute("data-booking-id");
-      const code = btn.getAttribute("data-code");
-      await postBookingAction("checkout", bookingId, code, btn);
+      await postBookingAction("checkout", bookingId, btn);
     });
   });
 }
@@ -204,7 +201,7 @@ async function loadData() {
     tbody.innerHTML = data.results
       .map((p) => {
         const isAvail = p.status === "Available";
-        const statusClass = isAvail ? "available" : "reserved";
+        const podStatusClass = isAvail ? "available" : "reserved";
 
         let current = `<span class="muted">—</span>`;
 
@@ -215,35 +212,34 @@ async function loadData() {
             ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
             : "";
 
-        const account = p.active.account
-  ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
-  : "";
+          const account = p.active.account
+            ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
+            : "";
 
           const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
-let statusLabel = "Not checked in";
-let statusClass = "checkin-none";
 
-if (rawStatus === "in") {
-  statusLabel = "Checked In";
-  statusClass = "checkin-in";
-} else if (rawStatus === "out") {
-  statusLabel = "Checked Out";
-  statusClass = "checkin-out";
-} else {
-  statusLabel = "Not Checked In";
-  statusClass = "checkin-none";
-}
+          let statusLabel = "Not Checked In";
+          let currentStatusClass = "checkin-none";
 
-         const nowMs = Date.now();
-const startMs = new Date(p.active.fromDate).getTime();
-const endMs = new Date(p.active.toDate).getTime();
-const reservationStillActive = nowMs >= startMs && nowMs < endMs;
+          if (rawStatus === "in") {
+            statusLabel = "Checked In";
+            currentStatusClass = "checkin-in";
+          } else if (rawStatus === "out") {
+            statusLabel = "Checked Out";
+            currentStatusClass = "checkin-out";
+          }
 
-// Only allow Check In while reservation is still in progress and not already checked in
-const canCheckIn = reservationStillActive && rawStatus !== "in" && rawStatus !== "out";
+          const nowMs = Date.now();
+          const startMs = new Date(p.active.fromDate).getTime();
+          const endMs = new Date(p.active.toDate).getTime();
+          const reservationStillActive = nowMs >= startMs && nowMs < endMs;
 
-// Only allow Check Out while reservation is checked in
-const canCheckOut = rawStatus === "in";
+          const canCheckIn =
+            reservationStillActive &&
+            rawStatus !== "in" &&
+            rawStatus !== "out";
+
+          const canCheckOut = rawStatus === "in";
 
           const checkInBtn = canCheckIn
             ? `
@@ -251,7 +247,6 @@ const canCheckOut = rawStatus === "in";
                 type="button"
                 class="btn-action btn-checkin"
                 data-booking-id="${escapeHtml(p.active.bookingId)}"
-                data-code="${escapeHtml(p.active.checkInCode)}"
               >
                 Check In
               </button>
@@ -264,7 +259,6 @@ const canCheckOut = rawStatus === "in";
                 type="button"
                 class="btn-action btn-checkout"
                 data-booking-id="${escapeHtml(p.active.bookingId)}"
-                data-code="${escapeHtml(p.active.checkInCode)}"
               >
                 Check Out
               </button>
@@ -276,7 +270,7 @@ const canCheckOut = rawStatus === "in";
             ${account}
             ${range}<br/>
             <span data-endtime="${p.active.toDate}" class="reserved"></span><br/>
-            <span class="checkin-state ${statusClass}">${escapeHtml(statusLabel)}</span>
+            <span class="checkin-state ${currentStatusClass}">${escapeHtml(statusLabel)}</span>
             <div class="action-wrap">
               <div class="action-buttons">
                 ${checkInBtn}
@@ -294,7 +288,7 @@ const canCheckOut = rawStatus === "in";
         return `
           <tr>
             <td>${escapeHtml(p.name || "")}</td>
-            <td class="${statusClass}">${escapeHtml(p.status)}</td>
+            <td class="${podStatusClass}">${escapeHtml(p.status)}</td>
             <td>${current}</td>
             <td>${next}</td>
           </tr>
