@@ -1,4 +1,4 @@
-// server.js — Study Pods Dashboard (date range + manual refresh, NO grace)
+// server.js — Study Pods Dashboard
 const express = require("express");
 const fetch = require("node-fetch");
 const path = require("path");
@@ -9,9 +9,16 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
+
+// Prevent stale browser caching for this app
+app.use((req, res, next) => {
+  res.set("Cache-Control", "no-store");
+  next();
+});
+
+app.use(express.json());
 app.use(express.static("public"));
 
-// Keep ranges reasonable
 const MAX_RANGE_DAYS = 31;
 
 /* ============================
@@ -41,6 +48,78 @@ function daysBetweenInclusive(startDate, endDate) {
 function parseIsoSafe(s) {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
+}
+
+function isSameLocalDay(dateValue, ymdString) {
+  if (!dateValue || !ymdString) return false;
+  const d = new Date(dateValue);
+  if (isNaN(d.getTime())) return false;
+  return toYMD(d) === ymdString;
+}
+
+function normalizeCheckInStatus(value) {
+  const v = String(value || "").trim().toLowerCase();
+
+  if (!v || v === "-" || v === "none" || v === "null") return "Not Checked In";
+  if (v === "in" || v === "checked in") return "Checked In";
+  if (v === "out" || v === "checked out") return "Checked Out";
+
+  return "Not Checked In";
+}
+
+function extractPatronName(b) {
+  const full = `${b.firstName || ""} ${b.lastName || ""}`.trim();
+  if (full) return full;
+  if (b.name) return String(b.name).trim();
+  if (b.fullName) return String(b.fullName).trim();
+  return "";
+}
+
+function extractPatronCard(b) {
+  const directCandidates = [
+    b.account,
+    b.barcode,
+    b.card,
+    b.card_number,
+    b.library_card,
+    b.libraryCard,
+    b.patron_barcode,
+    b.patronBarcode,
+  ];
+
+  for (const val of directCandidates) {
+    if (val != null && String(val).trim()) {
+      return String(val).trim();
+    }
+  }
+
+  for (const [key, value] of Object.entries(b || {})) {
+    if (!/^q\d+$/i.test(key)) continue;
+    if (value == null) continue;
+
+    const v = String(value).trim();
+    if (!v) continue;
+
+    if (/^\d{8,20}$/.test(v)) return v;
+  }
+
+  return "";
+}
+
+function cloneReservation(bk) {
+  if (!bk) return null;
+
+  return {
+    patron: bk.patron || "",
+    firstName: bk.firstName || "",
+    lastName: bk.lastName || "",
+    email: bk.email || "",
+    account: bk.account || "",
+    fromDate: bk.fromDate,
+    toDate: bk.toDate,
+    checkInStatus: bk.checkInStatus || "Not Checked In",
+    status: bk.status || "",
+  };
 }
 
 async function getLibCalToken() {
@@ -85,12 +164,14 @@ app.get("/ping", (req, res) => res.send("OK"));
 
 /* ============================
    API: pods status for date range
-   - NO grace: immediately ends at toDate
-   - "current" = now >= start AND now < end
-   - "next" = first booking with start > now
 ============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+    res.set("Surrogate-Control", "no-store");
+
     const lid = process.env.PODS_LOCATION_ID;
     const cid = process.env.PODS_CATEGORY_ID;
 
@@ -127,7 +208,6 @@ app.get("/api/pods-status", async (req, res) => {
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
-    // 1) Fetch pods (space items) in location+category
     const items = [];
     let pageIndex = 0;
 
@@ -152,10 +232,9 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 100) break;
       pageIndex++;
-      if (pageIndex > 20) break; // safety
+      if (pageIndex > 20) break;
     }
 
-    // 2) Fetch bookings for the whole range in one call:
     const bookings = [];
     let page = 1;
 
@@ -171,7 +250,8 @@ app.get("/api/pods-status", async (req, res) => {
         include_denied: "0",
         include_tentative: "0",
         include_remote: "0",
-        check_in_status: "0",
+        check_in_status: "1",
+        form_answers: "1",
       });
 
       const bookingsUrl = `https://greenburghlibrary.libcal.com/1.1/space/bookings?${bookParams.toString()}`;
@@ -187,13 +267,14 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 500) break;
       page++;
-      if (page > 20) break; // safety
+      if (page > 20) break;
     }
 
     const now = new Date();
+    const todayYmd = toYMD(now);
 
-    // group bookings by pod eid
     const byEid = new Map();
+
     for (const b of bookings) {
       if (!b) continue;
       if (String(b.status || "").toLowerCase() !== "confirmed") continue;
@@ -206,12 +287,19 @@ app.get("/api/pods-status", async (req, res) => {
       if (!start || !end) continue;
 
       if (!byEid.has(eid)) byEid.set(eid, []);
+
       byEid.get(eid).push({
         start,
         end,
         fromDate: b.fromDate,
         toDate: b.toDate,
-        patron: `${b.firstName || ""} ${b.lastName || ""}`.trim(),
+        patron: extractPatronName(b),
+        firstName: b.firstName || "",
+        lastName: b.lastName || "",
+        email: b.email || "",
+        account: extractPatronCard(b),
+        checkInStatus: normalizeCheckInStatus(b.check_in_status),
+        status: b.status || "",
       });
     }
 
@@ -226,21 +314,26 @@ app.get("/api/pods-status", async (req, res) => {
         const name = it.name || "(Unnamed pod)";
         const list = eid != null ? byEid.get(eid) || [] : [];
 
-        // CURRENT (no grace): start <= now < end
         let active = null;
-        for (const bk of list) {
-          if (now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
-            active = bk;
-            break;
-          }
-        }
-
-        // NEXT: first booking whose start > now
         let next = null;
+        let last = null;
+
         for (const bk of list) {
-          if (bk.start.getTime() > now.getTime()) {
+          if (!active && now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
+            active = bk;
+          }
+
+          if (!next && bk.start.getTime() > now.getTime()) {
             next = bk;
-            break;
+          }
+
+          if (
+            bk.end.getTime() <= now.getTime() &&
+            isSameLocalDay(bk.end, todayYmd)
+          ) {
+            if (!last || bk.end.getTime() > last.end.getTime()) {
+              last = bk;
+            }
           }
         }
 
@@ -248,10 +341,9 @@ app.get("/api/pods-status", async (req, res) => {
           eid,
           name,
           status: active ? "Reserved" : "Available",
-          active: active
-            ? { patron: active.patron || "", fromDate: active.fromDate, toDate: active.toDate }
-            : null,
-          next: next ? { fromDate: next.fromDate, toDate: next.toDate } : null,
+          active: cloneReservation(active),
+          next: cloneReservation(next),
+          last: cloneReservation(last),
         };
       })
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
