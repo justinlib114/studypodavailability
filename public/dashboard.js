@@ -37,15 +37,19 @@ function fmtDateTime(dt) {
   });
 }
 
+
 function fmtRange(fromDate, toDate) {
   if (!fromDate || !toDate) return "";
 
+  // If reservation is today, show time only
   if (isSameDay(fromDate, new Date())) {
     return `${fmtTime(fromDate)}–${fmtTime(toDate)}`;
   }
 
+  // Otherwise, show date + time
   return `${fmtDateTime(fromDate)}–${fmtTime(toDate)}`;
 }
+
 
 function escapeHtml(s) {
   return String(s || "")
@@ -57,7 +61,7 @@ function escapeHtml(s) {
 }
 
 /* ============================
-   Countdown
+   Countdown helpers
 ============================ */
 function minutesUntil(isoEnd) {
   const end = new Date(isoEnd).getTime();
@@ -84,80 +88,6 @@ function renderCountdown() {
 }
 
 /* ============================
-   Check-in / Check-out actions
-============================ */
-async function postBookingAction(action, bookingId, buttonEl) {
-  const originalText = buttonEl ? buttonEl.textContent : "";
-  const actionCell = buttonEl ? buttonEl.closest(".action-wrap") : null;
-  const msgEl = actionCell ? actionCell.querySelector(".action-message") : null;
-
-  try {
-    if (buttonEl) {
-      buttonEl.disabled = true;
-      buttonEl.textContent = action === "checkin" ? "Checking in..." : "Checking out...";
-    }
-
-    if (msgEl) {
-      msgEl.textContent = "";
-      msgEl.className = "action-message";
-    }
-
-    const resp = await fetch(`/api/booking/${action}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-dashboard-key": window.DASHBOARD_ADMIN_KEY || "",
-      },
-      body: JSON.stringify({
-        id: bookingId,
-      }),
-    });
-
-    const data = await resp.json();
-
-    if (!resp.ok) {
-      throw new Error(data.detail || data.error || `Failed to ${action}`);
-    }
-
-    if (msgEl) {
-      msgEl.textContent =
-        action === "checkin"
-          ? "Checked in successfully."
-          : "Checked out successfully.";
-      msgEl.className = "action-message success";
-    }
-
-    await loadData();
-  } catch (e) {
-    if (msgEl) {
-      msgEl.textContent = e.message || `Failed to ${action}`;
-      msgEl.className = "action-message error-text";
-    }
-  } finally {
-    if (buttonEl) {
-      buttonEl.disabled = false;
-      buttonEl.textContent = originalText;
-    }
-  }
-}
-
-function bindActionButtons() {
-  document.querySelectorAll(".btn-checkin").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const bookingId = btn.getAttribute("data-booking-id");
-      await postBookingAction("checkin", bookingId, btn);
-    });
-  });
-
-  document.querySelectorAll(".btn-checkout").forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const bookingId = btn.getAttribute("data-booking-id");
-      await postBookingAction("checkout", bookingId, btn);
-    });
-  });
-}
-
-/* ============================
    Main load
 ============================ */
 async function loadData() {
@@ -172,6 +102,7 @@ async function loadData() {
 
   tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
 
+  // Stop any previous countdown loop
   if (countdownTimer) {
     clearInterval(countdownTimer);
     countdownTimer = null;
@@ -189,9 +120,7 @@ async function loadData() {
     const data = await r.json();
     const updated = new Date(data.now).toLocaleString();
 
-    meta.textContent =
-      `Range: ${data.range.start} → ${data.range.end} ` +
-      `(${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
+    meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
 
     if (!data.results || !data.results.length) {
       tbody.innerHTML = `<tr><td colspan="4" class="muted">No pods returned.</td></tr>`;
@@ -201,85 +130,20 @@ async function loadData() {
     tbody.innerHTML = data.results
       .map((p) => {
         const isAvail = p.status === "Available";
-        const podStatusClass = isAvail ? "available" : "reserved";
+        const statusClass = isAvail ? "available" : "reserved";
 
         let current = `<span class="muted">—</span>`;
 
         if (p.active) {
           const range = escapeHtml(fmtRange(p.active.fromDate, p.active.toDate));
-
           const patron = p.active.patron
             ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
             : "";
 
-          const account = p.active.account
-            ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
-            : "";
-
-          const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
-          let statusLabel = "Not checked in";
-          let currentStatusClass = "checkin-none";
-
-          if (rawStatus === "in") {
-            statusLabel = "Checked In";
-            currentStatusClass = "checkin-in";
-          } else if (rawStatus === "out") {
-            statusLabel = "Checked Out";
-            currentStatusClass = "checkin-out";
-          } else {
-            statusLabel = "Not Checked In";
-            currentStatusClass = "checkin-none";
-          }
-
-          const nowMs = Date.now();
-          const startMs = new Date(p.active.fromDate).getTime();
-          const endMs = new Date(p.active.toDate).getTime();
-          const reservationStillActive = nowMs >= startMs && nowMs < endMs;
-
-          const canCheckIn =
-            reservationStillActive &&
-            rawStatus !== "in" &&
-            rawStatus !== "out";
-
-          const canCheckOut = rawStatus === "in";
-
-          const checkInBtn = canCheckIn
-            ? `
-              <button
-                type="button"
-                class="btn-action btn-checkin"
-                data-booking-id="${escapeHtml(p.active.bookingId)}"
-              >
-                Check In
-              </button>
-            `
-            : "";
-
-          const checkOutBtn = canCheckOut
-            ? `
-              <button
-                type="button"
-                class="btn-action btn-checkout"
-                data-booking-id="${escapeHtml(p.active.bookingId)}"
-              >
-                Check Out
-              </button>
-            `
-            : "";
-
           current = `
             ${patron}
-            ${account}
             ${range}<br/>
-            <span data-endtime="${p.active.toDate}" class="reserved"></span><br/>
-            <span class="checkin-state ${currentStatusClass}">${escapeHtml(statusLabel)}</span>
-            <div class="action-wrap">
-              <div class="action-buttons">
-                ${checkInBtn}
-                ${checkOutBtn}
-              </div>
-              <div class="action-message"></div>
-            </div>
+            <span data-endtime="${p.active.toDate}" class="reserved"></span>
           `;
         }
 
@@ -290,7 +154,7 @@ async function loadData() {
         return `
           <tr>
             <td>${escapeHtml(p.name || "")}</td>
-            <td class="${podStatusClass}">${escapeHtml(p.status)}</td>
+            <td class="${statusClass}">${escapeHtml(p.status)}</td>
             <td>${current}</td>
             <td>${next}</td>
           </tr>
@@ -298,9 +162,10 @@ async function loadData() {
       })
       .join("");
 
+    // Initial countdown render + interval
     renderCountdown();
     countdownTimer = setInterval(renderCountdown, 30000);
-    bindActionButtons();
+
   } catch (e) {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="4" class="error">${escapeHtml(e.message)}</td></tr>`;
@@ -308,6 +173,8 @@ async function loadData() {
 }
 
 document.getElementById("refresh").addEventListener("click", loadData);
+
+// Load immediately on first open (defaults to today's date range already in the inputs)
 window.addEventListener("DOMContentLoaded", loadData);
 
 /* ============================
@@ -317,7 +184,6 @@ window.addEventListener("DOMContentLoaded", loadData);
   const today = ymdToday();
   const startEl = document.getElementById("start");
   const endEl = document.getElementById("end");
-
   if (startEl && !startEl.value) startEl.value = today;
   if (endEl && !endEl.value) endEl.value = today;
 })();
