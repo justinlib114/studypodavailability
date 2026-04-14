@@ -348,7 +348,6 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
       return res.status(400).json({ error: "Missing booking id." });
     }
 
-    // Always re-fetch the booking and use the live code from LibCal
     const currentBooking = await findBookingById(id);
 
     if (!currentBooking) {
@@ -362,7 +361,6 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
 
     let autoCheckedOut = null;
 
-    // If prior booking on same pod is still checked in, check it out FIRST
     const previousBooking = await findPreviousCheckedInBooking(currentBooking);
 
     if (previousBooking) {
@@ -426,7 +424,6 @@ app.post("/api/booking/checkout", requireDashboardKey, async (req, res) => {
       return res.status(400).json({ error: "Missing booking id." });
     }
 
-    // Always re-fetch the booking and use the live code from LibCal if present
     const booking = await findBookingById(id);
 
     if (!booking) {
@@ -645,30 +642,28 @@ app.get("/api/pods-status", async (req, res) => {
           eid,
           name,
           status: active ? "Reserved" : "Available",
-          active: active
-            ? {
-                bookingId: active.bookingId,
-                bookId: active.bookId,
-                checkInCode: active.checkInCode,
-                checkInStatus: active.checkInStatus,
-                account: active.account || "",
-                patron: active.patron || "",
-                fromDate: active.fromDate,
-                toDate: active.toDate,
-              }
-            : null,
-          next: next
-            ? {
-                bookingId: next.bookingId,
-                bookId: next.bookId,
-                checkInCode: next.checkInCode,
-                checkInStatus: next.checkInStatus,
-                account: next.account || "",
-                patron: next.patron || "",
-                fromDate: next.fromDate,
-                toDate: next.toDate,
-              }
-            : null,
+          active: active ? normalizeBooking({
+            id: active.bookingId,
+            bookId: active.bookId,
+            check_in_code: active.checkInCode,
+            check_in_status: active.checkInStatus,
+            account: active.account,
+            firstName: active.patron.split(" ").slice(0, -1).join(" "),
+            lastName: active.patron.split(" ").slice(-1).join(" "),
+            fromDate: active.fromDate,
+            toDate: active.toDate,
+          }) : null,
+          next: next ? normalizeBooking({
+            id: next.bookingId,
+            bookId: next.bookId,
+            check_in_code: next.checkInCode,
+            check_in_status: next.checkInStatus,
+            account: next.account,
+            firstName: next.patron.split(" ").slice(0, -1).join(" "),
+            lastName: next.patron.split(" ").slice(-1).join(" "),
+            fromDate: next.fromDate,
+            toDate: next.toDate,
+          }) : null,
         };
       })
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
