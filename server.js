@@ -8,6 +8,7 @@
 // - route guard using DASHBOARD_ADMIN_KEY
 // - auto-checkout of previous checked-in reservation on same pod before checking in current one
 // - 15-minute grace display after reservation ends, unless another reservation starts within that grace window
+// - server-side booking code lookup for BOTH check-in and check-out
 
 const express = require("express");
 const fetch = require("node-fetch");
@@ -299,6 +300,19 @@ async function findPreviousCheckedInBooking(currentBooking) {
   return previous;
 }
 
+function normalizeBooking(b) {
+  return {
+    bookingId: b.id != null ? String(b.id) : "",
+    bookId: b.bookId || "",
+    checkInCode: b.check_in_code || "",
+    checkInStatus: b.check_in_status || "-",
+    account: b.account || "",
+    patron: `${b.firstName || ""} ${b.lastName || ""}`.trim(),
+    fromDate: b.fromDate,
+    toDate: b.toDate,
+  };
+}
+
 /* ============================
    Pages
 ============================ */
@@ -329,27 +343,39 @@ app.get("/ping", (req, res) => res.send("OK"));
 app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
   try {
     const id = String(req.body.id || "").trim();
-    const code = String(req.body.code || "").trim();
 
-    if (!id || !code) {
-      return res.status(400).json({ error: "Missing booking id or check-in code." });
+    if (!id) {
+      return res.status(400).json({ error: "Missing booking id." });
     }
 
+    // Always re-fetch the booking and use the live code from LibCal
     const currentBooking = await findBookingById(id);
 
     if (!currentBooking) {
       return res.status(404).json({ error: "Current booking not found." });
     }
 
+    const currentCode = String(currentBooking.check_in_code || "").trim();
+    if (!currentCode) {
+      return res.status(400).json({ error: "Current booking has no check-in code." });
+    }
+
     let autoCheckedOut = null;
 
+    // If prior booking on same pod is still checked in, check it out FIRST
     const previousBooking = await findPreviousCheckedInBooking(currentBooking);
 
     if (previousBooking) {
       const previousId = String(previousBooking.id || "").trim();
+      const previousCode = String(previousBooking.check_in_code || "").trim();
 
       if (previousId) {
-        const checkoutData = await libCalPost("/space/checkout", { id: previousId });
+        const checkoutParams = { id: previousId };
+        if (previousCode) {
+          checkoutParams.code = previousCode;
+        }
+
+        const checkoutData = await libCalPost("/space/checkout", checkoutParams);
 
         autoCheckedOut = {
           bookingId: previousId,
@@ -366,7 +392,10 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
       }
     }
 
-    const data = await libCalPost("/space/checkin", { id, code });
+    const data = await libCalPost("/space/checkin", {
+      id: String(currentBooking.id),
+      code: currentCode,
+    });
 
     console.log(`[CHECKIN] booking ${id} at ${new Date().toISOString()}`);
 
@@ -374,6 +403,10 @@ app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
       ok: true,
       action: "checkin",
       autoCheckedOut,
+      bookingUsed: {
+        id: String(currentBooking.id),
+        code: currentCode,
+      },
       data,
     });
   } catch (e) {
@@ -393,11 +426,33 @@ app.post("/api/booking/checkout", requireDashboardKey, async (req, res) => {
       return res.status(400).json({ error: "Missing booking id." });
     }
 
-    const data = await libCalPost("/space/checkout", { id });
+    // Always re-fetch the booking and use the live code from LibCal if present
+    const booking = await findBookingById(id);
+
+    if (!booking) {
+      return res.status(404).json({ error: "Booking not found." });
+    }
+
+    const bookingCode = String(booking.check_in_code || "").trim();
+
+    const params = { id: String(booking.id) };
+    if (bookingCode) {
+      params.code = bookingCode;
+    }
+
+    const data = await libCalPost("/space/checkout", params);
 
     console.log(`[CHECKOUT] booking ${id} at ${new Date().toISOString()}`);
 
-    res.json({ ok: true, action: "checkout", data });
+    res.json({
+      ok: true,
+      action: "checkout",
+      bookingUsed: {
+        id: String(booking.id),
+        code: bookingCode,
+      },
+      data,
+    });
   } catch (e) {
     console.error(e);
     res.status(500).json({
@@ -449,9 +504,6 @@ app.get("/api/pods-status", async (req, res) => {
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
-    /* ============================
-       1) Fetch space items
-    ============================= */
     const items = [];
     let pageIndex = 0;
 
@@ -479,9 +531,6 @@ app.get("/api/pods-status", async (req, res) => {
       if (pageIndex > 20) break;
     }
 
-    /* ============================
-       2) Fetch bookings
-    ============================= */
     const bookings = [];
     let page = 1;
 
@@ -517,10 +566,6 @@ app.get("/api/pods-status", async (req, res) => {
     }
 
     const now = new Date();
-
-    /* ============================
-       Group bookings by pod eid
-    ============================= */
     const byEid = new Map();
 
     for (const b of bookings) {
@@ -614,6 +659,12 @@ app.get("/api/pods-status", async (req, res) => {
             : null,
           next: next
             ? {
+                bookingId: next.bookingId,
+                bookId: next.bookId,
+                checkInCode: next.checkInCode,
+                checkInStatus: next.checkInStatus,
+                account: next.account || "",
+                patron: next.patron || "",
                 fromDate: next.fromDate,
                 toDate: next.toDate,
               }
