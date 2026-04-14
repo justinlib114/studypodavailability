@@ -37,19 +37,15 @@ function fmtDateTime(dt) {
   });
 }
 
-
 function fmtRange(fromDate, toDate) {
   if (!fromDate || !toDate) return "";
 
-  // If reservation is today, show time only
   if (isSameDay(fromDate, new Date())) {
     return `${fmtTime(fromDate)}–${fmtTime(toDate)}`;
   }
 
-  // Otherwise, show date + time
   return `${fmtDateTime(fromDate)}–${fmtTime(toDate)}`;
 }
-
 
 function escapeHtml(s) {
   return String(s || "")
@@ -60,9 +56,6 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-/* ============================
-   Countdown helpers
-============================ */
 function minutesUntil(isoEnd) {
   const end = new Date(isoEnd).getTime();
   const now = Date.now();
@@ -87,9 +80,95 @@ function renderCountdown() {
   });
 }
 
-/* ============================
-   Main load
-============================ */
+function normalizeStatus(status) {
+  const s = String(status || "").trim().toLowerCase();
+
+  if (!s || s === "-" || s === "not checked in") return "not_checked_in";
+  if (s === "in" || s === "checked in") return "checked_in";
+  if (s === "out" || s === "checked out") return "checked_out";
+
+  return "unknown";
+}
+
+function renderCheckStatusText(reservation) {
+  if (!reservation) return "—";
+
+  const normalized = normalizeStatus(reservation.checkInStatus);
+
+  if (normalized === "checked_in") return "Checked In";
+  if (normalized === "checked_out") return "Checked Out";
+  return "Not Checked In";
+}
+
+function renderCheckStatusClass(reservation) {
+  if (!reservation) return "";
+
+  const normalized = normalizeStatus(reservation.checkInStatus);
+
+  if (normalized === "checked_in") return "check-in";
+  if (normalized === "checked_out") return "check-out";
+  return "check-none";
+}
+
+function renderStatusCell(p) {
+  const baseStatus = p.status === "Reserved" ? "Reserved" : "Available";
+  const checkText = p.active ? renderCheckStatusText(p.active) : "—";
+  const checkClass = p.active ? renderCheckStatusClass(p.active) : "";
+
+  return `
+    <div class="${baseStatus === "Reserved" ? "reserved" : "available"}">
+      ${escapeHtml(baseStatus)}
+    </div>
+    <div class="check-status ${checkClass}">
+      ${escapeHtml(checkText)}
+    </div>
+  `;
+}
+
+function renderCurrentReservation(active) {
+  if (!active) return `<span class="muted">—</span>`;
+
+  return `
+    <strong>${escapeHtml(active.patron || "—")}</strong><br/>
+    <div>
+      <span class="card-number">${escapeHtml(active.account || "—")}</span>
+    </div>
+    <div>${escapeHtml(fmtRange(active.fromDate, active.toDate))}</div>
+    <div><span data-endtime="${escapeHtml(active.toDate)}" class="reserved"></span></div>
+  `;
+}
+
+function renderNextReservation(next) {
+  if (!next) return `<span class="muted">—</span>`;
+
+  return `
+    <strong>${escapeHtml(next.patron || "—")}</strong><br/>
+    <div>
+      <span class="card-number">${escapeHtml(next.account || "—")}</span>
+    </div>
+    <div>${escapeHtml(fmtRange(next.fromDate, next.toDate))}</div>
+  `;
+}
+
+function renderLastReservation(last) {
+  if (!last) return `<span class="muted">—</span>`;
+
+  const checkClass = renderCheckStatusClass(last);
+  const checkText = renderCheckStatusText(last);
+
+  return `
+    <div class="recently-ended-label">Recently Ended</div>
+    <strong>${escapeHtml(last.patron || "—")}</strong><br/>
+    <div>
+      <span class="card-number">${escapeHtml(last.account || "—")}</span>
+    </div>
+    <div>${escapeHtml(fmtRange(last.fromDate, last.toDate))}</div>
+    <div class="check-status ${checkClass}">
+      ${escapeHtml(checkText)}
+    </div>
+  `;
+}
+
 async function loadData() {
   const tbody = document.getElementById("rows");
   const meta = document.getElementById("meta");
@@ -100,17 +179,21 @@ async function loadData() {
   const start = startEl?.value || ymdToday();
   const end = endEl?.value || start;
 
-  tbody.innerHTML = `<tr><td colspan="4" class="muted">Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
 
-  // Stop any previous countdown loop
   if (countdownTimer) {
     clearInterval(countdownTimer);
     countdownTimer = null;
   }
 
   try {
-    const url = `/api/pods-status?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
-    const r = await fetch(url);
+    const url = `/api/pods-status?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&_ts=${Date.now()}`;
+    const r = await fetch(url, {
+      cache: "no-store",
+      headers: {
+        "Cache-Control": "no-cache",
+      },
+    });
 
     if (!r.ok) {
       const t = await r.text();
@@ -123,67 +206,38 @@ async function loadData() {
     meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
 
     if (!data.results || !data.results.length) {
-      tbody.innerHTML = `<tr><td colspan="4" class="muted">No pods returned.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="muted">No pods returned.</td></tr>`;
       return;
     }
 
     tbody.innerHTML = data.results
-      .map((p) => {
-        const isAvail = p.status === "Available";
-        const statusClass = isAvail ? "available" : "reserved";
-
-        let current = `<span class="muted">—</span>`;
-
-        if (p.active) {
-          const range = escapeHtml(fmtRange(p.active.fromDate, p.active.toDate));
-          const patron = p.active.patron
-            ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
-            : "";
-
-          current = `
-            ${patron}
-            ${range}<br/>
-            <span data-endtime="${p.active.toDate}" class="reserved"></span>
-          `;
-        }
-
-        const next = p.next
-          ? escapeHtml(fmtRange(p.next.fromDate, p.next.toDate))
-          : `<span class="muted">—</span>`;
-
-        return `
-          <tr>
-            <td>${escapeHtml(p.name || "")}</td>
-            <td class="${statusClass}">${escapeHtml(p.status)}</td>
-            <td>${current}</td>
-            <td>${next}</td>
-          </tr>
-        `;
-      })
+      .map((p) => `
+        <tr>
+          <td>${escapeHtml(p.name || "")}</td>
+          <td>${renderStatusCell(p)}</td>
+          <td>${renderCurrentReservation(p.active)}</td>
+          <td>${renderNextReservation(p.next)}</td>
+          <td class="last-reservation">${renderLastReservation(p.last)}</td>
+        </tr>
+      `)
       .join("");
 
-    // Initial countdown render + interval
     renderCountdown();
-    countdownTimer = setInterval(renderCountdown, 30000);
-
+    countdownTimer = setInterval(loadData, 30000);
   } catch (e) {
     meta.textContent = "—";
-    tbody.innerHTML = `<tr><td colspan="4" class="error">${escapeHtml(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="error">${escapeHtml(e.message)}</td></tr>`;
   }
 }
 
 document.getElementById("refresh").addEventListener("click", loadData);
-
-// Load immediately on first open (defaults to today's date range already in the inputs)
 window.addEventListener("DOMContentLoaded", loadData);
 
-/* ============================
-   Init defaults
-============================ */
 (() => {
   const today = ymdToday();
   const startEl = document.getElementById("start");
   const endEl = document.getElementById("end");
+
   if (startEl && !startEl.value) startEl.value = today;
   if (endEl && !endEl.value) endEl.value = today;
 })();
