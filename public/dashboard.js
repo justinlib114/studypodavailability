@@ -217,8 +217,7 @@ async function loadData() {
             : "";
 
           const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
-
-          let statusLabel = "Not Checked In";
+          let statusLabel = "Not checked in";
           let currentStatusClass = "checkin-none";
 
           if (rawStatus === "in") {
@@ -227,6 +226,9 @@ async function loadData() {
           } else if (rawStatus === "out") {
             statusLabel = "Checked Out";
             currentStatusClass = "checkin-out";
+          } else {
+            statusLabel = "Not Checked In";
+            currentStatusClass = "checkin-none";
           }
 
           const nowMs = Date.now();
