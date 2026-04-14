@@ -13,8 +13,15 @@ body {
   margin-bottom: 12px;
 }
 
-h1 { margin: 0 0 4px 0; font-size: 20px; }
-.muted { color: #666; font-size: 13px; }
+h1 {
+  margin: 0 0 4px 0;
+  font-size: 20px;
+}
+
+.muted {
+  color: #666;
+  font-size: 13px;
+}
 
 .controls {
   display: flex;
@@ -23,20 +30,30 @@ h1 { margin: 0 0 4px 0; font-size: 20px; }
   align-items: flex-end;
 }
 
-label { display: flex; flex-direction: column; font-size: 12px; gap: 4px; }
-input, button {
+label {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  gap: 4px;
+}
+
+input,
+button {
   padding: 7px 10px;
   font-size: 14px;
 }
 
-button { cursor: pointer; }
+button {
+  cursor: pointer;
+}
 
 .table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.table th, .table td {
+.table th,
+.table td {
   border: 1px solid #ddd;
   padding: 8px;
   vertical-align: top;
@@ -47,14 +64,70 @@ button { cursor: pointer; }
   text-align: left;
 }
 
-.today {
-  font-weight: 700;
-}
-
 .error {
   color: #b00020;
 }
 
-/* ===== Added for pod status + countdown labels ===== */
-.available { color: green; font-weight: 700; }
-.reserved  { color: #b00020; font-weight: 700; }
+.available {
+  color: green;
+  font-weight: 700;
+}
+
+.reserved {
+  color: #b00020;
+  font-weight: 700;
+}
+
+.card-number {
+  font-size: 16px;
+  font-weight: 700;
+  color: #000;
+}
+
+.check-status {
+  font-weight: 700;
+  margin-top: 4px;
+}
+
+.check-in {
+  color: #0a7a33;
+}
+
+.check-out {
+  color: #8a2be2;
+}
+
+.check-none {
+  color: #b00020;
+}
+
+/* Last Reservation column styling */
+.table td.last-reservation {
+  background-color: #f5f5f5;
+}
+
+.table th.last-reservation {
+  background-color: #e6e6e6;
+}
+
+.last-reservation .card-number,
+.last-reservation strong {
+  color: #333;
+}
+
+.last-reservation {
+  opacity: 0.95;
+}
+
+.recently-ended-label {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: #555;
+  background: #e9e9e9;
+  border: 1px solid #d2d2d2;
+  border-radius: 999px;
+}
