@@ -1,33 +1,18 @@
-// server.js — Study Pods Dashboard
-// Includes:
-// - date range view
-// - active / next reservations
-// - patron name
-// - account / library card number
-// - check-in / check-out buttons
-// - route guard using DASHBOARD_ADMIN_KEY
-// - auto-checkout of previous checked-in reservation on same pod before checking in current one
-// - 15-minute grace display after reservation ends, unless another reservation starts within that grace window
-// - server-side booking code lookup for BOTH check-in and check-out
-
+// server.js — Study Pods Dashboard (date range + manual refresh, NO grace)
 const express = require("express");
 const fetch = require("node-fetch");
 const path = require("path");
-const fs = require("fs");
 const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.disable("x-powered-by");
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
+// Keep ranges reasonable
 const MAX_RANGE_DAYS = 31;
-const ENDED_GRACE_MINUTES = 15;
 
 /* ============================
    Helpers
@@ -48,26 +33,14 @@ function parseYMD(s) {
 
 function daysBetweenInclusive(startDate, endDate) {
   const msPerDay = 24 * 60 * 60 * 1000;
-  const a = new Date(
-    startDate.getFullYear(),
-    startDate.getMonth(),
-    startDate.getDate()
-  ).getTime();
-  const b = new Date(
-    endDate.getFullYear(),
-    endDate.getMonth(),
-    endDate.getDate()
-  ).getTime();
+  const a = new Date(startDate.getFullYear(), startDate.getMonth(), startDate.getDate()).getTime();
+  const b = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime();
   return Math.floor((b - a) / msPerDay) + 1;
 }
 
 function parseIsoSafe(s) {
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
-}
-
-function addMinutes(date, minutes) {
-  return new Date(date.getTime() + minutes * 60 * 1000);
 }
 
 async function getLibCalToken() {
@@ -78,7 +51,6 @@ async function getLibCalToken() {
   }
 
   const tokenUrl = "https://greenburghlibrary.libcal.com/1.1/oauth/token";
-
   const body = new URLSearchParams({
     client_id: CLIENT_ID_PHYSICAL,
     client_secret: CLIENT_SECRET_PHYSICAL,
@@ -100,367 +72,22 @@ async function getLibCalToken() {
   return data.access_token;
 }
 
-async function libCalGet(endpoint, params) {
-  const token = await getLibCalToken();
-  const url = `https://greenburghlibrary.libcal.com/1.1${endpoint}?${new URLSearchParams(params).toString()}`;
-
-  const resp = await fetch(url, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
-  });
-
-  const text = await resp.text();
-
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-
-  if (!resp.ok) {
-    throw new Error(`${endpoint} error: ${resp.status} ${resp.statusText} - ${text}`);
-  }
-
-  return data;
-}
-
-async function libCalPost(endpoint, params) {
-  const token = await getLibCalToken();
-  const url = `https://greenburghlibrary.libcal.com/1.1${endpoint}?${new URLSearchParams(params).toString()}`;
-
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/json",
-    },
-  });
-
-  const text = await resp.text();
-
-  let data;
-  try {
-    data = text ? JSON.parse(text) : {};
-  } catch {
-    data = { raw: text };
-  }
-
-  if (!resp.ok) {
-    throw new Error(`${endpoint} error: ${resp.status} ${resp.statusText} - ${text}`);
-  }
-
-  return data;
-}
-
-async function fetchBookingsForRange({
-  lid,
-  cid,
-  startDateYMD,
-  days,
-  eid = null,
-  email = null,
-}) {
-  const all = [];
-  let page = 1;
-
-  while (true) {
-    const params = {
-      lid: String(lid),
-      cid: String(cid),
-      date: String(startDateYMD),
-      days: String(days),
-      limit: "500",
-      page: String(page),
-      include_cancel: "0",
-      include_denied: "0",
-      include_tentative: "0",
-      include_remote: "0",
-      check_in_status: "1",
-    };
-
-    if (eid != null && eid !== "") {
-      params.eid = String(eid);
-    }
-
-    if (email) {
-      params.email = String(email);
-    }
-
-    const chunk = await libCalGet("/space/bookings", params);
-
-    if (!Array.isArray(chunk)) break;
-    all.push(...chunk);
-
-    if (chunk.length < 500) break;
-    page += 1;
-    if (page > 20) break;
-  }
-
-  return all;
-}
-
-function requireDashboardKey(req, res, next) {
-  const expected = String(process.env.DASHBOARD_ADMIN_KEY || "").trim();
-  const provided = String(req.get("x-dashboard-key") || "").trim();
-
-  if (!expected) {
-    return res.status(500).json({ error: "Missing DASHBOARD_ADMIN_KEY in env" });
-  }
-
-  if (!provided || provided !== expected) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  next();
-}
-
-async function findBookingById(bookingId) {
-  const lid = process.env.PODS_LOCATION_ID;
-  const cid = process.env.PODS_CATEGORY_ID;
-
-  if (!lid || !cid) {
-    throw new Error("Missing PODS_LOCATION_ID or PODS_CATEGORY_ID in env");
-  }
-
-  const today = new Date();
-
-  let bookings = await fetchBookingsForRange({
-    lid,
-    cid,
-    startDateYMD: toYMD(today),
-    days: 7,
-  });
-
-  let found = bookings.find((b) => String(b.id) === String(bookingId));
-  if (found) return found;
-
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-
-  bookings = await fetchBookingsForRange({
-    lid,
-    cid,
-    startDateYMD: toYMD(yesterday),
-    days: 8,
-  });
-
-  found = bookings.find((b) => String(b.id) === String(bookingId));
-  return found || null;
-}
-
-async function findPreviousCheckedInBooking(currentBooking) {
-  const lid = process.env.PODS_LOCATION_ID;
-  const cid = process.env.PODS_CATEGORY_ID;
-
-  if (!lid || !cid) {
-    throw new Error("Missing PODS_LOCATION_ID or PODS_CATEGORY_ID in env");
-  }
-
-  if (!currentBooking || !currentBooking.eid || !currentBooking.fromDate) {
-    return null;
-  }
-
-  const currentStart = parseIsoSafe(currentBooking.fromDate);
-  if (!currentStart) return null;
-
-  const searchStart = new Date(currentStart);
-  searchStart.setDate(searchStart.getDate() - 1);
-
-  const bookings = await fetchBookingsForRange({
-    lid,
-    cid,
-    eid: currentBooking.eid,
-    startDateYMD: toYMD(searchStart),
-    days: 2,
-  });
-
-  const candidates = bookings
-    .filter((b) => String(b.status || "").toLowerCase() === "confirmed")
-    .filter((b) => String(b.id) !== String(currentBooking.id))
-    .map((b) => ({
-      ...b,
-      _start: parseIsoSafe(b.fromDate),
-      _end: parseIsoSafe(b.toDate),
-    }))
-    .filter((b) => b._start && b._end)
-    .filter((b) => b._end.getTime() <= currentStart.getTime())
-    .sort((a, b) => b._end.getTime() - a._end.getTime());
-
-  const previous = candidates[0];
-  if (!previous) return null;
-
-  if (String(previous.check_in_status || "").toLowerCase() !== "in") {
-    return null;
-  }
-
-  return previous;
-}
-
-function normalizeBooking(b) {
-  return {
-    bookingId: b.id != null ? String(b.id) : "",
-    bookId: b.bookId || "",
-    checkInCode: b.check_in_code || "",
-    checkInStatus: b.check_in_status || "-",
-    account: b.account || "",
-    patron: `${b.firstName || ""} ${b.lastName || ""}`.trim(),
-    fromDate: b.fromDate,
-    toDate: b.toDate,
-  };
-}
-
 /* ============================
    Pages
 ============================ */
 app.get("/", (req, res) => res.redirect("/dashboard"));
 
 app.get("/dashboard", (req, res) => {
-  const dashboardPath = path.join(__dirname, "public", "dashboard.html");
-  let html = fs.readFileSync(dashboardPath, "utf8");
-
-  html = html.replace(
-    "</body>",
-    `
-    <script>
-      window.DASHBOARD_ADMIN_KEY = ${JSON.stringify(process.env.DASHBOARD_ADMIN_KEY || "")};
-    </script>
-    </body>`
-  );
-
-  res.setHeader("Content-Type", "text/html; charset=utf-8");
-  res.send(html);
+  res.sendFile(path.join(__dirname, "public", "dashboard.html"));
 });
 
 app.get("/ping", (req, res) => res.send("OK"));
 
 /* ============================
-   API: Check in / Check out
-============================ */
-app.post("/api/booking/checkin", requireDashboardKey, async (req, res) => {
-  try {
-    const id = String(req.body.id || "").trim();
-
-    if (!id) {
-      return res.status(400).json({ error: "Missing booking id." });
-    }
-
-    const currentBooking = await findBookingById(id);
-
-    if (!currentBooking) {
-      return res.status(404).json({ error: "Current booking not found." });
-    }
-
-    const currentCode = String(currentBooking.check_in_code || "").trim();
-    if (!currentCode) {
-      return res.status(400).json({ error: "Current booking has no check-in code." });
-    }
-
-    let autoCheckedOut = null;
-
-    const previousBooking = await findPreviousCheckedInBooking(currentBooking);
-
-    if (previousBooking) {
-      const previousId = String(previousBooking.id || "").trim();
-      const previousCode = String(previousBooking.check_in_code || "").trim();
-
-      if (previousId) {
-        const checkoutParams = { id: previousId };
-        if (previousCode) {
-          checkoutParams.code = previousCode;
-        }
-
-        const checkoutData = await libCalPost("/space/checkout", checkoutParams);
-
-        autoCheckedOut = {
-          bookingId: previousId,
-          patron: `${previousBooking.firstName || ""} ${previousBooking.lastName || ""}`.trim(),
-          account: previousBooking.account || "",
-          fromDate: previousBooking.fromDate || "",
-          toDate: previousBooking.toDate || "",
-          data: checkoutData,
-        };
-
-        console.log(
-          `[AUTOCHECKOUT] previous booking ${previousId} auto-checked out before checking in ${id}`
-        );
-      }
-    }
-
-    const data = await libCalPost("/space/checkin", {
-      id: String(currentBooking.id),
-      code: currentCode,
-    });
-
-    console.log(`[CHECKIN] booking ${id} at ${new Date().toISOString()}`);
-
-    res.json({
-      ok: true,
-      action: "checkin",
-      autoCheckedOut,
-      bookingUsed: {
-        id: String(currentBooking.id),
-        code: currentCode,
-      },
-      data,
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({
-      error: "Check-in failed",
-      detail: String(e.message || e),
-    });
-  }
-});
-
-app.post("/api/booking/checkout", requireDashboardKey, async (req, res) => {
-  try {
-    const id = String(req.body.id || "").trim();
-
-    if (!id) {
-      return res.status(400).json({ error: "Missing booking id." });
-    }
-
-    const booking = await findBookingById(id);
-
-    if (!booking) {
-      return res.status(404).json({ error: "Booking not found." });
-    }
-
-    const bookingCode = String(booking.check_in_code || "").trim();
-
-    const params = { id: String(booking.id) };
-    if (bookingCode) {
-      params.code = bookingCode;
-    }
-
-    const data = await libCalPost("/space/checkout", params);
-
-    console.log(`[CHECKOUT] booking ${id} at ${new Date().toISOString()}`);
-
-    res.json({
-      ok: true,
-      action: "checkout",
-      bookingUsed: {
-        id: String(booking.id),
-        code: bookingCode,
-      },
-      data,
-    });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({
-      error: "Check-out failed",
-      detail: String(e.message || e),
-    });
-  }
-});
-
-/* ============================
    API: pods status for date range
+   - NO grace: immediately ends at toDate
+   - "current" = now >= start AND now < end
+   - "next" = first booking with start > now
 ============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
@@ -486,7 +113,6 @@ app.get("/api/pods-status", async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ error: "Invalid start/end. Use YYYY-MM-DD." });
     }
-
     if (endDate < startDate) {
       return res.status(400).json({ error: "End date must be on/after start date." });
     }
@@ -501,6 +127,7 @@ app.get("/api/pods-status", async (req, res) => {
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
+    // 1) Fetch pods (space items) in location+category
     const items = [];
     let pageIndex = 0;
 
@@ -525,9 +152,10 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 100) break;
       pageIndex++;
-      if (pageIndex > 20) break;
+      if (pageIndex > 20) break; // safety
     }
 
+    // 2) Fetch bookings for the whole range in one call:
     const bookings = [];
     let page = 1;
 
@@ -543,7 +171,7 @@ app.get("/api/pods-status", async (req, res) => {
         include_denied: "0",
         include_tentative: "0",
         include_remote: "0",
-        check_in_status: "1",
+        check_in_status: "0",
       });
 
       const bookingsUrl = `https://greenburghlibrary.libcal.com/1.1/space/bookings?${bookParams.toString()}`;
@@ -559,12 +187,13 @@ app.get("/api/pods-status", async (req, res) => {
 
       if (!Array.isArray(chunk) || chunk.length < 500) break;
       page++;
-      if (page > 20) break;
+      if (page > 20) break; // safety
     }
 
     const now = new Date();
-    const byEid = new Map();
 
+    // group bookings by pod eid
+    const byEid = new Map();
     for (const b of bookings) {
       if (!b) continue;
       if (String(b.status || "").toLowerCase() !== "confirmed") continue;
@@ -577,13 +206,7 @@ app.get("/api/pods-status", async (req, res) => {
       if (!start || !end) continue;
 
       if (!byEid.has(eid)) byEid.set(eid, []);
-
       byEid.get(eid).push({
-        bookingId: b.id != null ? String(b.id) : "",
-        bookId: b.bookId || "",
-        checkInCode: b.check_in_code || "",
-        checkInStatus: b.check_in_status || "-",
-        account: b.account || "",
         start,
         end,
         fromDate: b.fromDate,
@@ -603,33 +226,16 @@ app.get("/api/pods-status", async (req, res) => {
         const name = it.name || "(Unnamed pod)";
         const list = eid != null ? byEid.get(eid) || [] : [];
 
+        // CURRENT (no grace): start <= now < end
         let active = null;
-
-        for (let i = 0; i < list.length; i++) {
-          const bk = list[i];
-          const nextBk = list[i + 1] || null;
-
-          const nowMs = now.getTime();
-          const startMs = bk.start.getTime();
-          const endMs = bk.end.getTime();
-          const graceEndMs = addMinutes(bk.end, ENDED_GRACE_MINUTES).getTime();
-
-          if (nowMs >= startMs && nowMs < endMs) {
+        for (const bk of list) {
+          if (now.getTime() >= bk.start.getTime() && now.getTime() < bk.end.getTime()) {
             active = bk;
             break;
           }
-
-          if (nowMs >= endMs && nowMs < graceEndMs) {
-            const nextStartsWithinGrace =
-              nextBk && nextBk.start.getTime() <= graceEndMs;
-
-            if (!nextStartsWithinGrace) {
-              active = bk;
-              break;
-            }
-          }
         }
 
+        // NEXT: first booking whose start > now
         let next = null;
         for (const bk of list) {
           if (bk.start.getTime() > now.getTime()) {
@@ -642,38 +248,16 @@ app.get("/api/pods-status", async (req, res) => {
           eid,
           name,
           status: active ? "Reserved" : "Available",
-          active: active ? normalizeBooking({
-            id: active.bookingId,
-            bookId: active.bookId,
-            check_in_code: active.checkInCode,
-            check_in_status: active.checkInStatus,
-            account: active.account,
-            firstName: active.patron.split(" ").slice(0, -1).join(" "),
-            lastName: active.patron.split(" ").slice(-1).join(" "),
-            fromDate: active.fromDate,
-            toDate: active.toDate,
-          }) : null,
-          next: next ? normalizeBooking({
-            id: next.bookingId,
-            bookId: next.bookId,
-            check_in_code: next.checkInCode,
-            check_in_status: next.checkInStatus,
-            account: next.account,
-            firstName: next.patron.split(" ").slice(0, -1).join(" "),
-            lastName: next.patron.split(" ").slice(-1).join(" "),
-            fromDate: next.fromDate,
-            toDate: next.toDate,
-          }) : null,
+          active: active
+            ? { patron: active.patron || "", fromDate: active.fromDate, toDate: active.toDate }
+            : null,
+          next: next ? { fromDate: next.fromDate, toDate: next.toDate } : null,
         };
       })
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({
-      range: {
-        start: toYMD(startDate),
-        end: toYMD(endDate),
-        days: rangeDays,
-      },
+      range: { start: toYMD(startDate), end: toYMD(endDate), days: rangeDays },
       now: now.toISOString(),
       count: results.length,
       results,
