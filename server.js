@@ -273,4 +273,3 @@ app.get("/api/pods-status", async (req, res) => {
 
 app.listen(port, () => {
   console.log(`Study Pods dashboard listening on http://localhost:${port}`);
-});
