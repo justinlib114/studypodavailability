@@ -1,4 +1,5 @@
 let countdownTimer = null;
+const EARLY_CHECKIN_MINUTES = 15;
 
 function ymdToday() {
   const d = new Date();
@@ -161,6 +162,24 @@ function bindActionButtons() {
 }
 
 /* ============================
+   Render helpers
+============================ */
+function getStatusInfo(rawStatus) {
+  let statusLabel = "Not Checked In";
+  let statusClass = "checkin-none";
+
+  if (rawStatus === "in") {
+    statusLabel = "Checked In";
+    statusClass = "checkin-in";
+  } else if (rawStatus === "out") {
+    statusLabel = "Checked Out";
+    statusClass = "checkin-out";
+  }
+
+  return { statusLabel, statusClass };
+}
+
+/* ============================
    Main load
 ============================ */
 async function loadData() {
@@ -204,7 +223,7 @@ async function loadData() {
     tbody.innerHTML = data.results
       .map((p) => {
         const isAvail = p.status === "Available";
-        const statusClass = isAvail ? "available" : "reserved";
+        const podStatusClass = isAvail ? "available" : "reserved";
 
         let current = `<span class="muted">—</span>`;
 
@@ -215,35 +234,24 @@ async function loadData() {
             ? `<strong>${escapeHtml(p.active.patron)}</strong><br/>`
             : "";
 
-        const account = p.active.account
-  ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
-  : "";
+          const account = p.active.account
+            ? `<span class="account-number">${escapeHtml(p.active.account)}</span>`
+            : "";
 
           const rawStatus = String(p.active.checkInStatus || "-").toLowerCase();
-let statusLabel = "Not checked in";
-let statusClass = "checkin-none";
+          const { statusLabel, statusClass } = getStatusInfo(rawStatus);
 
-if (rawStatus === "in") {
-  statusLabel = "Checked In";
-  statusClass = "checkin-in";
-} else if (rawStatus === "out") {
-  statusLabel = "Checked Out";
-  statusClass = "checkin-out";
-} else {
-  statusLabel = "Not Checked In";
-  statusClass = "checkin-none";
-}
+          const nowMs = Date.now();
+          const startMs = new Date(p.active.fromDate).getTime();
+          const endMs = new Date(p.active.toDate).getTime();
+          const reservationStillActive = nowMs >= startMs && nowMs < endMs;
 
-         const nowMs = Date.now();
-const startMs = new Date(p.active.fromDate).getTime();
-const endMs = new Date(p.active.toDate).getTime();
-const reservationStillActive = nowMs >= startMs && nowMs < endMs;
+          const canCheckIn =
+            reservationStillActive &&
+            rawStatus !== "in" &&
+            rawStatus !== "out";
 
-// Only allow Check In while reservation is still in progress and not already checked in
-const canCheckIn = reservationStillActive && rawStatus !== "in" && rawStatus !== "out";
-
-// Only allow Check Out while reservation is checked in
-const canCheckOut = rawStatus === "in";
+          const canCheckOut = rawStatus === "in";
 
           const checkInBtn = canCheckIn
             ? `
@@ -287,14 +295,69 @@ const canCheckOut = rawStatus === "in";
           `;
         }
 
-        const next = p.next
-          ? escapeHtml(fmtRange(p.next.fromDate, p.next.toDate))
-          : `<span class="muted">—</span>`;
+        let next = `<span class="muted">—</span>`;
+
+        if (p.next) {
+          const nextRange = escapeHtml(fmtRange(p.next.fromDate, p.next.toDate));
+          const nextPatron = p.next.patron
+            ? `<strong>${escapeHtml(p.next.patron)}</strong><br/>`
+            : "";
+          const nextAccount = p.next.account
+            ? `<span class="account-number">${escapeHtml(p.next.account)}</span>`
+            : "";
+
+          const nextRawStatus = String(p.next.checkInStatus || "-").toLowerCase();
+          const { statusLabel: nextStatusLabel, statusClass: nextStatusClass } =
+            getStatusInfo(nextRawStatus);
+
+          const nowMs = Date.now();
+          const nextStartMs = new Date(p.next.fromDate).getTime();
+          const earlyWindowStartMs = nextStartMs - EARLY_CHECKIN_MINUTES * 60 * 1000;
+          const noCurrentReservation = !p.active;
+
+          const canEarlyCheckIn =
+            noCurrentReservation &&
+            nowMs >= earlyWindowStartMs &&
+            nowMs < nextStartMs &&
+            nextRawStatus !== "in" &&
+            nextRawStatus !== "out";
+
+          const nextCheckInBtn = canEarlyCheckIn
+            ? `
+              <button
+                type="button"
+                class="btn-action btn-checkin"
+                data-booking-id="${escapeHtml(p.next.bookingId)}"
+                data-code="${escapeHtml(p.next.checkInCode)}"
+              >
+                Check In Early
+              </button>
+            `
+            : "";
+
+          const nextStatusLine =
+            nextRawStatus && nextRawStatus !== "-"
+              ? `<span class="checkin-state ${nextStatusClass}">${escapeHtml(nextStatusLabel)}</span>`
+              : "";
+
+          next = `
+            ${nextPatron}
+            ${nextAccount}
+            ${nextRange}<br/>
+            ${nextStatusLine}
+            <div class="action-wrap">
+              <div class="action-buttons">
+                ${nextCheckInBtn}
+              </div>
+              <div class="action-message"></div>
+            </div>
+          `;
+        }
 
         return `
           <tr>
             <td>${escapeHtml(p.name || "")}</td>
-            <td class="${statusClass}">${escapeHtml(p.status)}</td>
+            <td class="${podStatusClass}">${escapeHtml(p.status)}</td>
             <td>${current}</td>
             <td>${next}</td>
           </tr>
