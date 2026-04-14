@@ -13,19 +13,8 @@ body {
   margin-bottom: 12px;
 }
 
-h1 {
-  margin: 0 0 4px 0;
-  font-size: 20px;
-}
-
-.muted {
-  color: #c62828;
-  font-size: 16px;
-}
-
-span.muted {
-    font-weight: 700;
-}
+h1 { margin: 0 0 4px 0; font-size: 20px; }
+.muted { color: #666; font-size: 13px; }
 
 .controls {
   display: flex;
@@ -34,30 +23,20 @@ span.muted {
   align-items: flex-end;
 }
 
-label {
-  display: flex;
-  flex-direction: column;
-  font-size: 12px;
-  gap: 4px;
-}
-
-input,
-button {
+label { display: flex; flex-direction: column; font-size: 12px; gap: 4px; }
+input, button {
   padding: 7px 10px;
   font-size: 14px;
 }
 
-button {
-  cursor: pointer;
-}
+button { cursor: pointer; }
 
 .table {
   width: 100%;
   border-collapse: collapse;
 }
 
-.table th,
-.table td {
+.table th, .table td {
   border: 1px solid #ddd;
   padding: 8px;
   vertical-align: top;
@@ -68,102 +47,14 @@ button {
   text-align: left;
 }
 
+.today {
+  font-weight: 700;
+}
+
 .error {
   color: #b00020;
 }
 
-.available {
-  color: green;
-  font-weight: 700;
-}
-
-.reserved {
-  color: #b00020;
-  font-weight: 700;
-}
-
-.account-number {
-  display: block;
-  font-size: 16px;
-  font-weight: 600;
-  margin-bottom: 0;
-  color: #222;
-}
-
-.checkin-state {
-  display: block;
-  margin-top: 6px;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-/* Status colors */
-.checkin-in {
-  color: green;
-}
-
-.checkin-out {
-  color: #555;
-}
-
-.checkin-none {
-  color: #b00020;
-}
-
-.action-wrap {
-  margin-top: 8px;
-}
-
-.action-buttons {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.btn-action {
-  border-radius: 4px;
-  padding: 6px 12px;
-  font-size: 13px;
-  font-weight: 700; /* bold */
-  border: none;
-  cursor: pointer;
-}
-
-/* Check In button (green) */
-.btn-checkin {
-  background: #2e7d32;
-  color: white;
-}
-
-.btn-checkin:hover {
-  background: #256628;
-}
-
-/* Check Out button (red) */
-.btn-checkout {
-  background: #c62828;
-  color: white;
-}
-
-.btn-checkout:hover {
-  background: #a61f1f;
-}
-
-/* Disabled state */
-.btn-action:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.action-message {
-  margin-top: 6px;
-  font-size: 12px;
-}
-
-.success {
-  color: green;
-}
-
-.error-text {
-  color: #b00020;
-}
+/* ===== Added for pod status + countdown labels ===== */
+.available { color: green; font-weight: 700; }
+.reserved  { color: #b00020; font-weight: 700; }
