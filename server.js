@@ -8,6 +8,8 @@
 // - route guard using DASHBOARD_ADMIN_KEY
 // - auto-checkout of previous checked-in reservation on same pod before checking in current one
 // - 15-minute grace display after reservation ends, unless another reservation starts within that grace window
+// - next reservation details returned for display
+// - supports early check-in up to 15 minutes before the next reservation starts
 
 const express = require("express");
 const fetch = require("node-fetch");
@@ -449,9 +451,6 @@ app.get("/api/pods-status", async (req, res) => {
     const token = await getLibCalToken();
     const headers = { Authorization: `Bearer ${token}` };
 
-    /* ============================
-       1) Fetch space items
-    ============================= */
     const items = [];
     let pageIndex = 0;
 
@@ -479,9 +478,6 @@ app.get("/api/pods-status", async (req, res) => {
       if (pageIndex > 20) break;
     }
 
-    /* ============================
-       2) Fetch bookings
-    ============================= */
     const bookings = [];
     let page = 1;
 
@@ -517,10 +513,6 @@ app.get("/api/pods-status", async (req, res) => {
     }
 
     const now = new Date();
-
-    /* ============================
-       Group bookings by pod eid
-    ============================= */
     const byEid = new Map();
 
     for (const b of bookings) {
@@ -614,6 +606,12 @@ app.get("/api/pods-status", async (req, res) => {
             : null,
           next: next
             ? {
+                bookingId: next.bookingId,
+                bookId: next.bookId,
+                checkInCode: next.checkInCode,
+                checkInStatus: next.checkInStatus,
+                account: next.account || "",
+                patron: next.patron || "",
                 fromDate: next.fromDate,
                 toDate: next.toDate,
               }
