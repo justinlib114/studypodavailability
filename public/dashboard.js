@@ -263,13 +263,18 @@ async function handleReservationAction(container, action) {
 
     const result = await postReservationAction(payload);
 
+    // pop-up confirmation
+    alert(result.message || "Action completed.");
+
     showMessage(result.message || "Action completed.", "success");
 
+    // wait briefly, then refresh from backend
     setTimeout(() => {
       loadData();
-    }, 1000);
+    }, 1200);
   } catch (e) {
     showMessage(e.message || "Action failed.", "error");
+    alert(e.message || "Action failed.");
     setButtonsDisabled(false);
   }
 }
