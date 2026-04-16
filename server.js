@@ -183,10 +183,39 @@ async function libCalPost(endpoint, params = {}) {
   }
 
   if (!resp.ok) {
-    throw new Error(`${resp.status} ${resp.statusText} - ${typeof data === "string" ? data : JSON.stringify(data)}`);
+    throw new Error(
+      `${resp.status} ${resp.statusText} - ${
+        typeof data === "string" ? data : JSON.stringify(data)
+      }`
+    );
   }
 
   return data;
+}
+
+async function getBookingsUpdates({ lid, sinceIso }) {
+  const token = await getLibCalToken();
+
+  const params = new URLSearchParams({
+    date: sinceIso,
+    lid: String(lid),
+  });
+
+  const url = `https://greenburghlibrary.libcal.com/1.1/space/bookings/updates?${params.toString()}`;
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`Booking updates error: ${resp.status} ${resp.statusText} - ${t}`);
+  }
+
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
 }
 
 /* ============================
@@ -308,6 +337,32 @@ app.get("/api/pods-status", async (req, res) => {
       if (page > 20) break;
     }
 
+    // Overlay freshest check-in/out states from the updates endpoint
+    try {
+      const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000 + 60 * 1000).toISOString();
+      const updates = await getBookingsUpdates({ lid, sinceIso });
+      const updatesByBookId = new Map();
+
+      for (const u of updates) {
+        if (!u || !u.bookId) continue;
+        updatesByBookId.set(String(u.bookId), u);
+      }
+
+      for (const b of bookings) {
+        const match = updatesByBookId.get(String(b.bookId || ""));
+        if (!match) continue;
+
+        if (match.check_in_status !== undefined) {
+          b.check_in_status = match.check_in_status;
+        }
+        if (match.status !== undefined) {
+          b.status = match.status;
+        }
+      }
+    } catch (updatesError) {
+      console.warn("Booking updates overlay failed:", updatesError.message);
+    }
+
     const now = new Date();
     const todayYmd = toYMD(now);
 
@@ -367,12 +422,7 @@ app.get("/api/pods-status", async (req, res) => {
           const isCheckedOut = bk.checkInStatus === "Checked Out";
           const endedOrFormer = endMs <= nowMs || isCheckedOut;
 
-          if (
-            !active &&
-            nowMs >= startMs &&
-            nowMs < endMs &&
-            !isCheckedOut
-          ) {
+          if (!active && nowMs >= startMs && nowMs < endMs && !isCheckedOut) {
             active = bk;
           }
 
@@ -380,10 +430,7 @@ app.get("/api/pods-status", async (req, res) => {
             next = bk;
           }
 
-          if (
-            endedOrFormer &&
-            isSameLocalDay(bk.end, todayYmd)
-          ) {
+          if (endedOrFormer && isSameLocalDay(bk.end, todayYmd)) {
             if (!last || endMs > last.end.getTime()) {
               last = bk;
             }
@@ -399,7 +446,7 @@ app.get("/api/pods-status", async (req, res) => {
           last: cloneReservation(last),
         };
       })
-      .sort((a, b) => String(a.name).localeCompare(String(a.name)));
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 
     res.json({
       range: { start: toYMD(startDate), end: toYMD(endDate), days: rangeDays },
