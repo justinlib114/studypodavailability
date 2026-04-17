@@ -119,6 +119,10 @@ function cloneReservation(bk) {
     toDate: bk.toDate,
     checkInStatus: bk.checkInStatus || "Not Checked In",
     status: bk.status || "",
+    bookId: bk.bookId || "",
+    numericId: bk.numericId || "",
+    checkInCode: bk.checkInCode || "",
+    eid: bk.eid || "",
   };
 }
 
@@ -149,6 +153,69 @@ async function getLibCalToken() {
 
   const data = await resp.json();
   return data.access_token;
+}
+
+async function libCalPost(endpoint, params = {}) {
+  const token = await getLibCalToken();
+  const url = new URL(`https://greenburghlibrary.libcal.com/1.1${endpoint}`);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  const resp = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  const text = await resp.text();
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!resp.ok) {
+    throw new Error(
+      `${resp.status} ${resp.statusText} - ${
+        typeof data === "string" ? data : JSON.stringify(data)
+      }`
+    );
+  }
+
+  return data;
+}
+
+async function getBookingsUpdates({ lid, sinceIso }) {
+  const token = await getLibCalToken();
+
+  const params = new URLSearchParams({
+    date: sinceIso,
+    lid: String(lid),
+  });
+
+  const url = `https://greenburghlibrary.libcal.com/1.1/space/bookings/updates?${params.toString()}`;
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text();
+    throw new Error(`Booking updates error: ${resp.status} ${resp.statusText} - ${t}`);
+  }
+
+  const data = await resp.json();
+  return Array.isArray(data) ? data : [];
 }
 
 /* ============================
@@ -270,6 +337,32 @@ app.get("/api/pods-status", async (req, res) => {
       if (page > 20) break;
     }
 
+    // Overlay freshest check-in/out states from the updates endpoint
+    try {
+      const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000 + 60 * 1000).toISOString();
+      const updates = await getBookingsUpdates({ lid, sinceIso });
+      const updatesByBookId = new Map();
+
+      for (const u of updates) {
+        if (!u || !u.bookId) continue;
+        updatesByBookId.set(String(u.bookId), u);
+      }
+
+      for (const b of bookings) {
+        const match = updatesByBookId.get(String(b.bookId || ""));
+        if (!match) continue;
+
+        if (match.check_in_status !== undefined) {
+          b.check_in_status = match.check_in_status;
+        }
+        if (match.status !== undefined) {
+          b.status = match.status;
+        }
+      }
+    } catch (updatesError) {
+      console.warn("Booking updates overlay failed:", updatesError.message);
+    }
+
     const now = new Date();
     const todayYmd = toYMD(now);
 
@@ -300,6 +393,10 @@ app.get("/api/pods-status", async (req, res) => {
         account: extractPatronCard(b),
         checkInStatus: normalizeCheckInStatus(b.check_in_status),
         status: b.status || "",
+        bookId: b.bookId || "",
+        numericId: b.id || "",
+        checkInCode: b.check_in_code || "",
+        eid,
       });
     }
 
@@ -325,12 +422,7 @@ app.get("/api/pods-status", async (req, res) => {
           const isCheckedOut = bk.checkInStatus === "Checked Out";
           const endedOrFormer = endMs <= nowMs || isCheckedOut;
 
-          if (
-            !active &&
-            nowMs >= startMs &&
-            nowMs < endMs &&
-            !isCheckedOut
-          ) {
+          if (!active && nowMs >= startMs && nowMs < endMs && !isCheckedOut) {
             active = bk;
           }
 
@@ -338,10 +430,7 @@ app.get("/api/pods-status", async (req, res) => {
             next = bk;
           }
 
-          if (
-            endedOrFormer &&
-            isSameLocalDay(bk.end, todayYmd)
-          ) {
+          if (endedOrFormer && isSameLocalDay(bk.end, todayYmd)) {
             if (!last || endMs > last.end.getTime()) {
               last = bk;
             }
@@ -369,6 +458,62 @@ app.get("/api/pods-status", async (req, res) => {
     console.error(e);
     res.status(500).json({
       error: "Failed to build pods status",
+      detail: String(e.message || e),
+    });
+  }
+});
+
+/* ============================
+   API: reservation actions
+============================ */
+app.post("/api/reservation-action", async (req, res) => {
+  try {
+    const action = String(req.body.action || "").trim().toLowerCase();
+    const bookId = String(req.body.bookId || "").trim();
+    const checkInCode = String(req.body.checkInCode || "").trim();
+    const patron = String(req.body.patron || "").trim();
+    const podName = String(req.body.podName || "").trim();
+    const timeRange = String(req.body.timeRange || "").trim();
+
+    if (!action || !["checkin", "checkout"].includes(action)) {
+      return res.status(400).json({ ok: false, error: "Invalid action." });
+    }
+
+    if (!bookId) {
+      return res.status(400).json({ ok: false, error: "Missing bookId." });
+    }
+
+    if (!checkInCode) {
+      return res.status(400).json({ ok: false, error: "Missing check-in code." });
+    }
+
+    const endpoint = action === "checkin" ? "/space/checkin" : "/space/checkout";
+
+    console.log("RESERVATION ACTION", {
+      action,
+      bookId,
+      checkInCode,
+      patron,
+      podName,
+      timeRange,
+    });
+
+    const result = await libCalPost(endpoint, {
+      id: bookId,
+      code: checkInCode,
+    });
+
+    res.json({
+      ok: true,
+      action,
+      message: `${action === "checkin" ? "Checked in" : "Checked out"} ${patron || "patron"}${podName ? ` (${podName})` : ""}${timeRange ? ` for ${timeRange}` : ""}.`,
+      result,
+    });
+  } catch (e) {
+    console.error("Reservation action error:", e);
+    res.status(500).json({
+      ok: false,
+      error: "Reservation action failed.",
       detail: String(e.message || e),
     });
   }

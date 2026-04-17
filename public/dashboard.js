@@ -1,3 +1,4 @@
+let autoRefreshTimer = null;
 let countdownTimer = null;
 
 function ymdToday() {
@@ -125,7 +126,58 @@ function renderStatusCell(p) {
   `;
 }
 
-function renderCurrentReservation(active) {
+function getButtonState(reservation) {
+  if (!reservation || !reservation.bookId || !reservation.checkInCode) {
+    return {
+      canCheckIn: false,
+      canCheckOut: false,
+    };
+  }
+
+  const normalized = normalizeStatus(reservation.checkInStatus);
+
+  if (normalized === "checked_in") {
+    return {
+      canCheckIn: false,
+      canCheckOut: true,
+    };
+  }
+
+  if (normalized === "checked_out") {
+    return {
+      canCheckIn: false,
+      canCheckOut: false,
+    };
+  }
+
+  return {
+    canCheckIn: true,
+    canCheckOut: false,
+  };
+}
+
+function actionButtons(reservation, podName, columnName) {
+  if (!reservation) return "";
+
+  const state = getButtonState(reservation);
+  const checkInDisabled = state.canCheckIn ? "" : "disabled";
+  const checkOutDisabled = state.canCheckOut ? "" : "disabled";
+
+  return `
+    <div class="action-buttons"
+      data-book-id="${escapeHtml(reservation.bookId || "")}"
+      data-check-in-code="${escapeHtml(reservation.checkInCode || "")}"
+      data-patron="${escapeHtml(reservation.patron || "")}"
+      data-pod-name="${escapeHtml(podName || "")}"
+      data-time-range="${escapeHtml(fmtRange(reservation.fromDate, reservation.toDate))}"
+      data-column-name="${escapeHtml(columnName || "")}">
+      <button type="button" class="action-btn btn-checkin" data-action="checkin" ${checkInDisabled}>Check In</button>
+      <button type="button" class="action-btn btn-checkout" data-action="checkout" ${checkOutDisabled}>Check Out</button>
+    </div>
+  `;
+}
+
+function renderCurrentReservation(active, podName) {
   if (!active) return `<span class="muted">—</span>`;
 
   return `
@@ -135,10 +187,14 @@ function renderCurrentReservation(active) {
     </div>
     <div>${escapeHtml(fmtRange(active.fromDate, active.toDate))}</div>
     <div><span data-endtime="${escapeHtml(active.toDate)}" class="reserved"></span></div>
+    <div class="check-status ${renderCheckStatusClass(active)}">
+      ${escapeHtml(renderCheckStatusText(active))}
+    </div>
+    ${actionButtons(active, podName, "Current Reservation")}
   `;
 }
 
-function renderNextReservation(next) {
+function renderNextReservation(next, podName) {
   if (!next) return `<span class="muted">—</span>`;
 
   return `
@@ -147,10 +203,14 @@ function renderNextReservation(next) {
       <span class="card-number">${escapeHtml(next.account || "—")}</span>
     </div>
     <div>${escapeHtml(fmtRange(next.fromDate, next.toDate))}</div>
+    <div class="check-status ${renderCheckStatusClass(next)}">
+      ${escapeHtml(renderCheckStatusText(next))}
+    </div>
+    ${actionButtons(next, podName, "Next Reservation")}
   `;
 }
 
-function renderLastReservation(last) {
+function renderLastReservation(last, podName) {
   if (!last) return `<span class="muted">—</span>`;
 
   const checkClass = renderCheckStatusClass(last);
@@ -166,7 +226,115 @@ function renderLastReservation(last) {
     <div class="check-status ${checkClass}">
       ${escapeHtml(checkText)}
     </div>
+    ${actionButtons(last, podName, "Last Reservation")}
   `;
+}
+
+function showMessage(message, type = "info") {
+  const el = document.getElementById("message");
+  if (!el) return;
+  el.textContent = message;
+  el.className = `message ${type}`;
+}
+
+function clearMessage() {
+  const el = document.getElementById("message");
+  if (!el) return;
+  el.textContent = "";
+  el.className = "message hidden";
+}
+
+function setBusyState(isBusy) {
+  document.querySelectorAll(".action-btn").forEach((btn) => {
+    btn.dataset.wasDisabled = btn.disabled ? "true" : "false";
+
+    if (isBusy) {
+      btn.disabled = true;
+    } else {
+      btn.disabled = btn.dataset.wasDisabled === "true";
+    }
+  });
+
+  const refreshBtn = document.getElementById("refresh");
+  if (refreshBtn) {
+    refreshBtn.disabled = isBusy;
+  }
+}
+
+async function postReservationAction(payload) {
+  const r = await fetch("/api/reservation-action", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-cache",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await r.json().catch(() => ({}));
+
+  if (!r.ok || !data.ok) {
+    throw new Error(data.detail || data.error || "Action failed.");
+  }
+
+  return data;
+}
+
+async function handleReservationAction(container, action) {
+  try {
+    const payload = {
+      action,
+      bookId: container.dataset.bookId || "",
+      checkInCode: container.dataset.checkInCode || "",
+      patron: container.dataset.patron || "",
+      podName: container.dataset.podName || "",
+      timeRange: container.dataset.timeRange || "",
+      columnName: container.dataset.columnName || "",
+    };
+
+    if (!payload.bookId) {
+      throw new Error("Missing bookId for this reservation.");
+    }
+
+    if (!payload.checkInCode) {
+      throw new Error("Missing check-in code for this reservation.");
+    }
+
+    setBusyState(true);
+    showMessage(`${action === "checkin" ? "Checking in" : "Checking out"} ${payload.patron || "reservation"}...`, "info");
+
+    const result = await postReservationAction(payload);
+
+    alert(result.message || "Action completed.");
+    showMessage(result.message || "Action completed.", "success");
+
+    setTimeout(() => {
+      loadData();
+    }, 1200);
+  } catch (e) {
+    showMessage(e.message || "Action failed.", "error");
+    alert(e.message || "Action failed.");
+    setBusyState(false);
+  }
+}
+
+function wireActionButtons() {
+  document.querySelectorAll(".action-buttons").forEach((container) => {
+    const checkInBtn = container.querySelector('[data-action="checkin"]');
+    const checkOutBtn = container.querySelector('[data-action="checkout"]');
+
+    if (checkInBtn && !checkInBtn.disabled) {
+      checkInBtn.addEventListener("click", () => {
+        handleReservationAction(container, "checkin");
+      });
+    }
+
+    if (checkOutBtn && !checkOutBtn.disabled) {
+      checkOutBtn.addEventListener("click", () => {
+        handleReservationAction(container, "checkout");
+      });
+    }
+  });
 }
 
 async function loadData() {
@@ -180,6 +348,13 @@ async function loadData() {
   const end = endEl?.value || start;
 
   tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
+
+  clearMessage();
+
+  if (autoRefreshTimer) {
+    clearTimeout(autoRefreshTimer);
+    autoRefreshTimer = null;
+  }
 
   if (countdownTimer) {
     clearInterval(countdownTimer);
@@ -215,18 +390,23 @@ async function loadData() {
         <tr>
           <td>${escapeHtml(p.name || "")}</td>
           <td>${renderStatusCell(p)}</td>
-          <td>${renderCurrentReservation(p.active)}</td>
-          <td>${renderNextReservation(p.next)}</td>
-          <td class="last-reservation">${renderLastReservation(p.last)}</td>
+          <td>${renderCurrentReservation(p.active, p.name)}</td>
+          <td>${renderNextReservation(p.next, p.name)}</td>
+          <td class="last-reservation">${renderLastReservation(p.last, p.name)}</td>
         </tr>
       `)
       .join("");
 
+    wireActionButtons();
     renderCountdown();
-    countdownTimer = setInterval(loadData, 30000);
+
+    countdownTimer = setInterval(renderCountdown, 30000);
+    autoRefreshTimer = setTimeout(loadData, 60000);
   } catch (e) {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="5" class="error">${escapeHtml(e.message)}</td></tr>`;
+  } finally {
+    setBusyState(false);
   }
 }
 
