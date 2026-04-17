@@ -244,10 +244,21 @@ function clearMessage() {
   el.className = "message hidden";
 }
 
-function setButtonsDisabled(disabled) {
-  document.querySelectorAll(".action-btn, #refresh").forEach((btn) => {
-    btn.disabled = disabled;
+function setBusyState(isBusy) {
+  document.querySelectorAll(".action-btn").forEach((btn) => {
+    btn.dataset.wasDisabled = btn.disabled ? "true" : "false";
+
+    if (isBusy) {
+      btn.disabled = true;
+    } else {
+      btn.disabled = btn.dataset.wasDisabled === "true";
+    }
   });
+
+  const refreshBtn = document.getElementById("refresh");
+  if (refreshBtn) {
+    refreshBtn.disabled = isBusy;
+  }
 }
 
 async function postReservationAction(payload) {
@@ -289,7 +300,7 @@ async function handleReservationAction(container, action) {
       throw new Error("Missing check-in code for this reservation.");
     }
 
-    setButtonsDisabled(true);
+    setBusyState(true);
     showMessage(`${action === "checkin" ? "Checking in" : "Checking out"} ${payload.patron || "reservation"}...`, "info");
 
     const result = await postReservationAction(payload);
@@ -303,7 +314,7 @@ async function handleReservationAction(container, action) {
   } catch (e) {
     showMessage(e.message || "Action failed.", "error");
     alert(e.message || "Action failed.");
-    setButtonsDisabled(false);
+    setBusyState(false);
   }
 }
 
@@ -395,7 +406,7 @@ async function loadData() {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="5" class="error">${escapeHtml(e.message)}</td></tr>`;
   } finally {
-    setButtonsDisabled(false);
+    setBusyState(false);
   }
 }
 
