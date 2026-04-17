@@ -126,11 +126,42 @@ function renderStatusCell(p) {
   `;
 }
 
+function getButtonState(reservation) {
+  if (!reservation || !reservation.bookId || !reservation.checkInCode) {
+    return {
+      canCheckIn: false,
+      canCheckOut: false,
+    };
+  }
+
+  const normalized = normalizeStatus(reservation.checkInStatus);
+
+  if (normalized === "checked_in") {
+    return {
+      canCheckIn: false,
+      canCheckOut: true,
+    };
+  }
+
+  if (normalized === "checked_out") {
+    return {
+      canCheckIn: false,
+      canCheckOut: false,
+    };
+  }
+
+  return {
+    canCheckIn: true,
+    canCheckOut: false,
+  };
+}
+
 function actionButtons(reservation, podName, columnName) {
   if (!reservation) return "";
 
-  const hasActionData = reservation.bookId && reservation.checkInCode;
-  const disabledAttr = hasActionData ? "" : "disabled";
+  const state = getButtonState(reservation);
+  const checkInDisabled = state.canCheckIn ? "" : "disabled";
+  const checkOutDisabled = state.canCheckOut ? "" : "disabled";
 
   return `
     <div class="action-buttons"
@@ -140,8 +171,8 @@ function actionButtons(reservation, podName, columnName) {
       data-pod-name="${escapeHtml(podName || "")}"
       data-time-range="${escapeHtml(fmtRange(reservation.fromDate, reservation.toDate))}"
       data-column-name="${escapeHtml(columnName || "")}">
-      <button type="button" class="action-btn btn-checkin" data-action="checkin" ${disabledAttr}>Check In</button>
-      <button type="button" class="action-btn btn-checkout" data-action="checkout" ${disabledAttr}>Check Out</button>
+      <button type="button" class="action-btn btn-checkin" data-action="checkin" ${checkInDisabled}>Check In</button>
+      <button type="button" class="action-btn btn-checkout" data-action="checkout" ${checkOutDisabled}>Check Out</button>
     </div>
   `;
 }
@@ -263,12 +294,9 @@ async function handleReservationAction(container, action) {
 
     const result = await postReservationAction(payload);
 
-    // pop-up confirmation
     alert(result.message || "Action completed.");
-
     showMessage(result.message || "Action completed.", "success");
 
-    // wait briefly, then refresh from backend
     setTimeout(() => {
       loadData();
     }, 1200);
@@ -284,13 +312,13 @@ function wireActionButtons() {
     const checkInBtn = container.querySelector('[data-action="checkin"]');
     const checkOutBtn = container.querySelector('[data-action="checkout"]');
 
-    if (checkInBtn) {
+    if (checkInBtn && !checkInBtn.disabled) {
       checkInBtn.addEventListener("click", () => {
         handleReservationAction(container, "checkin");
       });
     }
 
-    if (checkOutBtn) {
+    if (checkOutBtn && !checkOutBtn.disabled) {
       checkOutBtn.addEventListener("click", () => {
         handleReservationAction(container, "checkout");
       });
