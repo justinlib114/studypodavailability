@@ -48,8 +48,8 @@ button {
 }
 
 button:disabled {
-  opacity: 0.6;
-  cursor: wait;
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .table {
