@@ -157,20 +157,30 @@ async function getLibCalToken() {
 
 async function libCalPost(endpoint, params = {}) {
   const token = await getLibCalToken();
-  const url = new URL(`https://greenburghlibrary.libcal.com/1.1${endpoint}`);
+  const url = `https://greenburghlibrary.libcal.com/1.1${endpoint}`;
+
+  // Build FORM BODY (this is the key fix)
+  const body = new URLSearchParams();
 
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
-      url.searchParams.set(key, String(value));
+      body.append(key, String(value).trim());
     }
   });
 
-  const resp = await fetch(url.toString(), {
+  console.log("POSTING TO LIBCAL", {
+    endpoint,
+    body: body.toString(),
+  });
+
+  const resp = await fetch(url, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
       Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
     },
+    body: body.toString(),
   });
 
   const text = await resp.text();
@@ -192,7 +202,6 @@ async function libCalPost(endpoint, params = {}) {
 
   return data;
 }
-
 async function getBookingsUpdates({ lid, sinceIso }) {
   const token = await getLibCalToken();
 
