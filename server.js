@@ -498,12 +498,10 @@ app.post("/api/reservation-action", async (req, res) => {
       timeRange,
     });
 
-const params =
-  action === "checkout"
-    ? { id: bookId }
-    : { id: bookId, code: checkInCode };
-
-const result = await libCalPost(endpoint, params);
+    const result = await libCalPost(endpoint, {
+      id: bookId,
+      code: checkInCode,
+    });
 
     res.json({
       ok: true,
