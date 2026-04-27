@@ -10,7 +10,6 @@ const port = process.env.PORT || 3000;
 
 app.use(cors());
 
-// Prevent stale browser caching for this app
 app.use((req, res, next) => {
   res.set("Cache-Control", "no-store");
   next();
@@ -21,9 +20,6 @@ app.use(express.static("public"));
 
 const MAX_RANGE_DAYS = 31;
 
-/* ============================
-   Helpers
-============================ */
 function toYMD(d) {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
@@ -161,8 +157,15 @@ async function libCalPost(endpoint, params = {}) {
 
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && String(value).trim() !== "") {
-      url.searchParams.set(key, String(value));
+      url.searchParams.set(key, String(value).trim());
     }
+  });
+
+  console.log("FINAL LIBCAL REQUEST", {
+    method: "POST",
+    endpoint,
+    url: url.toString(),
+    params,
   });
 
   const resp = await fetch(url.toString(), {
@@ -181,6 +184,13 @@ async function libCalPost(endpoint, params = {}) {
   } catch {
     data = text;
   }
+
+  console.log("LIBCAL RESPONSE", {
+    endpoint,
+    status: resp.status,
+    ok: resp.ok,
+    data,
+  });
 
   if (!resp.ok) {
     throw new Error(
@@ -202,6 +212,7 @@ async function getBookingsUpdates({ lid, sinceIso }) {
   });
 
   const url = `https://greenburghlibrary.libcal.com/1.1/space/bookings/updates?${params.toString()}`;
+
   const resp = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
@@ -218,9 +229,57 @@ async function getBookingsUpdates({ lid, sinceIso }) {
   return Array.isArray(data) ? data : [];
 }
 
-/* ============================
-   Pages
-============================ */
+async function getFreshBookingByBookId(bookId) {
+  const lid = process.env.PODS_LOCATION_ID;
+  const cid = process.env.PODS_CATEGORY_ID;
+  const token = await getLibCalToken();
+
+  const params = new URLSearchParams({
+    lid: String(lid),
+    cid: String(cid),
+    date: toYMD(new Date()),
+    days: "0",
+    limit: "500",
+    page: "1",
+    include_cancel: "0",
+    include_denied: "0",
+    include_tentative: "0",
+    include_remote: "0",
+    check_in_status: "1",
+    form_answers: "1",
+  });
+
+  const url = `https://greenburghlibrary.libcal.com/1.1/space/bookings?${params.toString()}`;
+
+  const resp = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+  });
+
+  const text = await resp.text();
+  let data = null;
+
+  try {
+    data = text ? JSON.parse(text) : null;
+  } catch {
+    data = text;
+  }
+
+  if (!resp.ok) {
+    console.warn("Fresh booking lookup failed", {
+      status: resp.status,
+      response: data,
+    });
+    return null;
+  }
+
+  if (!Array.isArray(data)) return null;
+
+  return data.find((b) => String(b.bookId || "") === String(bookId)) || null;
+}
+
 app.get("/", (req, res) => res.redirect("/dashboard"));
 
 app.get("/dashboard", (req, res) => {
@@ -229,9 +288,6 @@ app.get("/dashboard", (req, res) => {
 
 app.get("/ping", (req, res) => res.send("OK"));
 
-/* ============================
-   API: pods status for date range
-============================ */
 app.get("/api/pods-status", async (req, res) => {
   try {
     res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
@@ -261,11 +317,13 @@ app.get("/api/pods-status", async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ error: "Invalid start/end. Use YYYY-MM-DD." });
     }
+
     if (endDate < startDate) {
       return res.status(400).json({ error: "End date must be on/after start date." });
     }
 
     const rangeDays = daysBetweenInclusive(startDate, endDate);
+
     if (rangeDays > MAX_RANGE_DAYS) {
       return res.status(400).json({
         error: `Date range too large. Max is ${MAX_RANGE_DAYS} days.`,
@@ -298,6 +356,7 @@ app.get("/api/pods-status", async (req, res) => {
       if (Array.isArray(chunk)) items.push(...chunk);
 
       if (!Array.isArray(chunk) || chunk.length < 100) break;
+
       pageIndex++;
       if (pageIndex > 20) break;
     }
@@ -333,11 +392,11 @@ app.get("/api/pods-status", async (req, res) => {
       if (Array.isArray(chunk)) bookings.push(...chunk);
 
       if (!Array.isArray(chunk) || chunk.length < 500) break;
+
       page++;
       if (page > 20) break;
     }
 
-    // Overlay freshest check-in/out states from the updates endpoint
     try {
       const sinceIso = new Date(Date.now() - 24 * 60 * 60 * 1000 + 60 * 1000).toISOString();
       const updates = await getBookingsUpdates({ lid, sinceIso });
@@ -355,6 +414,7 @@ app.get("/api/pods-status", async (req, res) => {
         if (match.check_in_status !== undefined) {
           b.check_in_status = match.check_in_status;
         }
+
         if (match.status !== undefined) {
           b.status = match.status;
         }
@@ -463,9 +523,6 @@ app.get("/api/pods-status", async (req, res) => {
   }
 });
 
-/* ============================
-   API: reservation actions
-============================ */
 app.post("/api/reservation-action", async (req, res) => {
   try {
     const action = String(req.body.action || "").trim().toLowerCase();
@@ -489,6 +546,23 @@ app.post("/api/reservation-action", async (req, res) => {
 
     const endpoint = action === "checkin" ? "/space/checkin" : "/space/checkout";
 
+    const freshBooking = await getFreshBookingByBookId(bookId);
+
+    console.log("FRESH BOOKING BEFORE ACTION", {
+      requestedAction: action,
+      submittedBookId: bookId,
+      submittedCode: checkInCode,
+      foundFreshBooking: !!freshBooking,
+      freshBookId: freshBooking?.bookId,
+      freshNumericId: freshBooking?.id,
+      freshCode: freshBooking?.check_in_code,
+      freshCheckInStatus: freshBooking?.check_in_status,
+      freshStatus: freshBooking?.status,
+      freshFromDate: freshBooking?.fromDate,
+      freshToDate: freshBooking?.toDate,
+      freshPatron: `${freshBooking?.firstName || ""} ${freshBooking?.lastName || ""}`.trim(),
+    });
+
     console.log("RESERVATION ACTION", {
       action,
       bookId,
@@ -496,6 +570,7 @@ app.post("/api/reservation-action", async (req, res) => {
       patron,
       podName,
       timeRange,
+      endpoint,
     });
 
     const result = await libCalPost(endpoint, {
