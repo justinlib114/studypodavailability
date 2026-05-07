@@ -182,6 +182,13 @@ async function libCalPost(endpoint, params = {}) {
     data = text;
   }
 
+  console.log("LIBCAL RESPONSE", {
+    endpoint,
+    status: resp.status,
+    ok: resp.ok,
+    data,
+  });
+
   if (!resp.ok) {
     throw new Error(
       `${resp.status} ${resp.statusText} - ${
@@ -261,11 +268,13 @@ app.get("/api/pods-status", async (req, res) => {
     if (!startDate || !endDate) {
       return res.status(400).json({ error: "Invalid start/end. Use YYYY-MM-DD." });
     }
+
     if (endDate < startDate) {
       return res.status(400).json({ error: "End date must be on/after start date." });
     }
 
     const rangeDays = daysBetweenInclusive(startDate, endDate);
+
     if (rangeDays > MAX_RANGE_DAYS) {
       return res.status(400).json({
         error: `Date range too large. Max is ${MAX_RANGE_DAYS} days.`,
@@ -298,6 +307,7 @@ app.get("/api/pods-status", async (req, res) => {
       if (Array.isArray(chunk)) items.push(...chunk);
 
       if (!Array.isArray(chunk) || chunk.length < 100) break;
+
       pageIndex++;
       if (pageIndex > 20) break;
     }
@@ -333,6 +343,7 @@ app.get("/api/pods-status", async (req, res) => {
       if (Array.isArray(chunk)) bookings.push(...chunk);
 
       if (!Array.isArray(chunk) || chunk.length < 500) break;
+
       page++;
       if (page > 20) break;
     }
@@ -355,8 +366,21 @@ app.get("/api/pods-status", async (req, res) => {
         if (match.check_in_status !== undefined) {
           b.check_in_status = match.check_in_status;
         }
+
         if (match.status !== undefined) {
           b.status = match.status;
+        }
+
+        if (match.fromDate !== undefined) {
+          b.fromDate = match.fromDate;
+        }
+
+        if (match.toDate !== undefined) {
+          b.toDate = match.toDate;
+        }
+
+        if (match.check_in_code !== undefined) {
+          b.check_in_code = match.check_in_code;
         }
       }
     } catch (updatesError) {
@@ -415,18 +439,44 @@ app.get("/api/pods-status", async (req, res) => {
         let next = null;
         let last = null;
 
+        const nowMs = now.getTime();
+
+        // First priority: true time-based active booking.
+        // This keeps a current reservation active until it ends or is checked out.
         for (const bk of list) {
-          const nowMs = now.getTime();
+          const startMs = bk.start.getTime();
+          const endMs = bk.end.getTime();
+          const isCheckedOut = bk.checkInStatus === "Checked Out";
+
+          if (!isCheckedOut && nowMs >= startMs && nowMs < endMs) {
+            active = bk;
+            break;
+          }
+        }
+
+        // Second priority: if there is no time-based active booking,
+        // show an already checked-in future booking as current.
+        // This handles early check-ins visually without changing LibCal times.
+        if (!active) {
+          for (const bk of list) {
+            const endMs = bk.end.getTime();
+            const isCheckedIn = bk.checkInStatus === "Checked In";
+            const isCheckedOut = bk.checkInStatus === "Checked Out";
+
+            if (isCheckedIn && !isCheckedOut && nowMs < endMs) {
+              active = bk;
+              break;
+            }
+          }
+        }
+
+        for (const bk of list) {
           const startMs = bk.start.getTime();
           const endMs = bk.end.getTime();
           const isCheckedOut = bk.checkInStatus === "Checked Out";
           const endedOrFormer = endMs <= nowMs || isCheckedOut;
 
-          if (!active && nowMs >= startMs && nowMs < endMs && !isCheckedOut) {
-            active = bk;
-          }
-
-          if (!next && startMs > nowMs) {
+          if (!next && startMs > nowMs && bk.bookId !== active?.bookId && !isCheckedOut) {
             next = bk;
           }
 
