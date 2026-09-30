@@ -337,6 +337,67 @@ function wireActionButtons() {
   });
 }
 
+
+async function sendPodOvertimeAlert(button) {
+  const eid = button.dataset.eid || "";
+  const podName = button.dataset.podName || "";
+
+  if (!eid) {
+    alert("Missing pod ID.");
+    return;
+  }
+
+  const originalText = button.textContent;
+
+  button.disabled = true;
+  button.textContent = "Sending…";
+
+  try {
+    const r = await fetch("/api/pod-alert", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-cache",
+      },
+      body: JSON.stringify({
+        eid,
+        podName,
+      }),
+    });
+
+    const data = await r.json().catch(() => ({}));
+
+    if (!r.ok || !data.ok) {
+      throw new Error(data.detail || data.error || "Could not send overtime alert.");
+    }
+
+    button.textContent = "Sent ✓";
+    showMessage(`Overtime alert sent to ${podName || "pod"}.`, "success");
+
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 1500);
+  } catch (e) {
+    button.textContent = "Error";
+    showMessage(e.message || "Could not send overtime alert.", "error");
+    alert(e.message || "Could not send overtime alert.");
+
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.disabled = false;
+    }, 2000);
+  }
+}
+
+function wireOvertimeAlertButtons() {
+  document.querySelectorAll(".btn-overtime-alert").forEach((button) => {
+    button.addEventListener("click", () => {
+      sendPodOvertimeAlert(button);
+    });
+  });
+}
+
 async function loadData() {
   const tbody = document.getElementById("rows");
   const meta = document.getElementById("meta");
@@ -347,7 +408,7 @@ async function loadData() {
   const start = startEl?.value || ymdToday();
   const end = endEl?.value || start;
 
-  tbody.innerHTML = `<tr><td colspan="5" class="muted">Loading…</td></tr>`;
+  tbody.innerHTML = `<tr><td colspan="6" class="muted">Loading…</td></tr>`;
 
   clearMessage();
 
@@ -381,7 +442,7 @@ async function loadData() {
     meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
 
     if (!data.results || !data.results.length) {
-      tbody.innerHTML = `<tr><td colspan="5" class="muted">No pods returned.</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="6" class="muted">No pods returned.</td></tr>`;
       return;
     }
 
@@ -393,18 +454,28 @@ async function loadData() {
           <td>${renderCurrentReservation(p.active, p.name)}</td>
           <td>${renderNextReservation(p.next, p.name)}</td>
           <td class="last-reservation">${renderLastReservation(p.last, p.name)}</td>
+          <td class="alert-column">
+            <button
+              type="button"
+              class="btn-overtime-alert"
+              data-eid="${escapeHtml(p.eid || "")}"
+              data-pod-name="${escapeHtml(p.name || "")}">
+              🔔 Overtime Chime
+            </button>
+          </td>
         </tr>
       `)
       .join("");
 
     wireActionButtons();
+    wireOvertimeAlertButtons();
     renderCountdown();
 
     countdownTimer = setInterval(renderCountdown, 30000);
     autoRefreshTimer = setTimeout(loadData, 60000);
   } catch (e) {
     meta.textContent = "—";
-    tbody.innerHTML = `<tr><td colspan="5" class="error">${escapeHtml(e.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`;
   } finally {
     setBusyState(false);
   }
