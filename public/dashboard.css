@@ -162,7 +162,7 @@ button:disabled {
 }
 
 .message {
-  margin-top: 8px;
+  margin: 0 0 12px 0;
   padding: 8px 10px;
   border-radius: 6px;
   font-size: 13px;
@@ -189,4 +189,30 @@ button:disabled {
   background: #fdecec;
   color: #b00020;
   border: 1px solid #f2b8c1;
+}
+
+/* Manual overtime alert button */
+.alert-column {
+  min-width: 150px;
+}
+
+.btn-overtime-alert {
+  border: none;
+  border-radius: 7px;
+  padding: 9px 12px;
+  background: #b00020;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn-overtime-alert:hover {
+  background: #8a0019;
+}
+
+.btn-overtime-alert:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
