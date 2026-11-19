@@ -22,6 +22,13 @@ app.use(express.static("public"));
 const MAX_RANGE_DAYS = 31;
 
 /* ============================
+   Manual pod overtime alerts
+============================ */
+const podAlerts = new Map();
+let podAlertSequence = 0;
+const POD_ALERT_TTL_MS = 60 * 1000;
+
+/* ============================
    Helpers
 ============================ */
 function toYMD(d) {
@@ -517,6 +524,89 @@ app.post("/api/reservation-action", async (req, res) => {
       detail: String(e.message || e),
     });
   }
+});
+
+
+/* ============================
+   API: manual pod overtime alert
+============================ */
+app.post("/api/pod-alert", (req, res) => {
+  try {
+    const eid = String(req.body.eid || "").trim();
+    const podName = String(req.body.podName || "").trim();
+
+    if (!eid || !/^\d+$/.test(eid)) {
+      return res.status(400).json({
+        ok: false,
+        error: "Invalid pod ID.",
+      });
+    }
+
+    const alert = {
+      id: `${Date.now()}-${++podAlertSequence}`,
+      eid,
+      podName,
+      createdAt: new Date().toISOString(),
+    };
+
+    podAlerts.set(eid, alert);
+
+    console.log("POD OVERTIME ALERT", alert);
+
+    res.set("Cache-Control", "no-store");
+    res.json({
+      ok: true,
+      alert,
+    });
+  } catch (e) {
+    console.error("Pod overtime alert error:", e);
+    res.status(500).json({
+      ok: false,
+      error: "Failed to send pod overtime alert.",
+      detail: String(e.message || e),
+    });
+  }
+});
+
+app.get("/api/pod-alert/:eid", (req, res) => {
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.set("Pragma", "no-cache");
+  res.set("Expires", "0");
+
+  const eid = String(req.params.eid || "").trim();
+
+  if (!eid || !/^\d+$/.test(eid)) {
+    return res.status(400).json({
+      ok: false,
+      error: "Invalid pod ID.",
+    });
+  }
+
+  const alert = podAlerts.get(eid);
+
+  if (!alert) {
+    return res.json({
+      ok: true,
+      alert: null,
+    });
+  }
+
+  const createdAtMs = new Date(alert.createdAt).getTime();
+  const ageMs = Date.now() - createdAtMs;
+
+  if (!Number.isFinite(createdAtMs) || ageMs > POD_ALERT_TTL_MS) {
+    podAlerts.delete(eid);
+
+    return res.json({
+      ok: true,
+      alert: null,
+    });
+  }
+
+  res.json({
+    ok: true,
+    alert,
+  });
 });
 
 app.listen(port, () => {
