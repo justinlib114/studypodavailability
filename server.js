@@ -17,6 +17,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Google Workspace authentication
+require("./staff-auth")(app);
+
 app.use(express.static("public"));
 
 const MAX_RANGE_DAYS = 31;
