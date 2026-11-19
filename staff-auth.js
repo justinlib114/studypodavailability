@@ -122,9 +122,9 @@ module.exports = function enableStaffAuth(app) {
   <main>
     <h1>Study Pod Dashboard</h1>
     <p>Sign in with your authorized library Google Workspace account.</p>
-    <form action="/auth/google" method="get">
-      <button type="submit">Sign in with Google</button>
-    </form>
+<a class="signin-link" href="/auth/google">
+  Sign in with Google
+</a>
   </main>
 </body>
 </html>`);
