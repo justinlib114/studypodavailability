@@ -103,7 +103,7 @@ module.exports = function enableStaffAuth(app) {
 <body>
   <main>
     <h1>Study Pod Dashboard</h1>
-    <p>Sign in with your library Google account.</p>
+    <p>Full-time staff can sign in with their library Google account to view study pod dashboard reservations.</p>
     <a class="signin-link" href="/auth/google" target="_blank" rel="noopener noreferrer">Sign in with Google (new tab)</a>
     <p>After signing in, return to this page and select <strong>Reload Dashboard</strong>.</p>
     <a class="reload-link" href="/dashboard">Reload Dashboard</a>
