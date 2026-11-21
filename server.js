@@ -589,14 +589,10 @@ app.post("/api/pod-alert", (req, res) => {
     }
     history.alerts.push({ id: alert.id, createdAt: alert.createdAt });
 
-   
-const sentBy = req.session?.user?.email || "unknown";
-
-console.log("POD OVERTIME ALERT", {
-  ...alert,
-  sentBy
-});
-
+    // Staff identity comes from the verified Google Workspace session.
+    // Log it privately in Render; do not add it to the public tablet alert.
+    const sentBy = req.session?.user?.email || "unknown";
+    console.log("POD OVERTIME ALERT", { ...alert, sentBy });
 
     res.set("Cache-Control", "no-store");
     res.json({
@@ -672,6 +668,247 @@ app.get("/api/pod-alert/:eid", (req, res) => {
     ok: true,
     alert,
   });
+});
+
+
+
+/* =========================================================
+   STAFF INCIDENT REPORTS (Email-only; no incident database)
+   All requests pass through the existing Google staff auth.
+   The matching POST path is also guarded by Origin and JSON checks.
+   Patron data is never logged to Render.
+========================================================= */
+const crypto = require("node:crypto");
+const INCIDENT_TYPES = new Set([
+  "Overstayed reservation",
+  "Consecutive reservation violation",
+  "Food or drink violation",
+  "Key not returned",
+  "Disruptive behavior",
+  "Equipment damage",
+  "Other",
+]);
+const ACTION_TYPES = new Set([
+  "Verbal reminder given",
+  "Written warning issued",
+  "Staff intervention required",
+  "Referred to supervisor",
+  "No action taken",
+  "Other / follow-up required",
+]);
+const INCIDENT_PODS = new Map([
+  ["219899", "Pod 1 (Up to 4)"],
+  ["219904", "Pod 2 (Up to 6)"],
+  ["219900", "Pod 3 (Up to 4)"],
+  ["multiple", "Multiple pods / Other"],
+]);
+
+function stringField(input, maxLen) {
+  return typeof input === "string" && input.length <= maxLen
+    ? input.trim()
+    : null;
+}
+
+function emailRecipients() {
+  const list = String(process.env.POD_INCIDENT_RECIPIENTS || "")
+    .split(",")
+    .map((x) => x.trim().toLowerCase())
+    .filter(Boolean);
+  const unique = [...new Set(list)];
+  if (unique.length !== 2 || unique.some((s) => !/^[^\s@,]+@[^\s@,]+\.[^\s@,]+$/.test(s))) {
+    throw new Error("Configure exactly two valid POD_INCIDENT_RECIPIENTS emails.");
+  }
+  return unique;
+}
+
+function incidentMailerConfig() {
+  const url = String(process.env.POD_INCIDENT_SCRIPT_URL || "").trim();
+  const secret = String(process.env.POD_INCIDENT_SHARED_SECRET || "").trim();
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/[^/?#]+\/exec$/.test(url)) {
+    throw new Error("POD_INCIDENT_SCRIPT_URL must be the deployed Google Apps Script /exec URL.");
+  }
+  if (secret.length < 32) {
+    throw new Error("POD_INCIDENT_SHARED_SECRET must contain at least 32 characters.");
+  }
+  return { url, secret };
+}
+
+function nyDateTime(iso) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: LIBRARY_TIME_ZONE,
+    year: "numeric", month: "long", day: "numeric",
+    hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true,
+    timeZoneName: "short",
+  }).format(new Date(iso));
+}
+
+function nyReservationRange(fromDate, toDate) {
+  return `${nyDateTime(fromDate)} to ${nyDateTime(toDate)}`;
+}
+
+// Resolve linked reservation data from LibCal itself rather than trusting
+// patron name, card number or booking details sent by a browser.
+async function verifyIncidentReservation({ bookId, eid, fromDate }) {
+  const lid = String(process.env.PODS_LOCATION_ID || "").trim();
+  const cid = String(process.env.PODS_CATEGORY_ID || "").trim();
+  if (!lid || !cid) throw new Error("Missing LibCal location/category configuration.");
+  const from = new Date(fromDate);
+  if (!Number.isFinite(from.getTime())) throw new Error("Invalid reservation date.");
+  const day = getLibraryDateKey(from);
+  const token = await getLibCalToken();
+
+  for (let page = 1; page <= 10; page++) {
+    const params = new URLSearchParams({
+      lid, cid, date: day, days: "0", limit: "500", page: String(page),
+      include_cancel: "1", include_denied: "0", include_tentative: "0",
+      include_remote: "0", form_answers: "1", check_in_status: "1",
+    });
+    const url = `https://greenburghlibrary.libcal.com/1.1/space/bookings?${params.toString()}`;
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+      timeout: 20000,
+    });
+    if (!resp.ok) throw new Error(`LibCal reservation lookup failed (HTTP ${resp.status}).`);
+    const bookings = await resp.json();
+    if (!Array.isArray(bookings)) throw new Error("Unexpected LibCal booking response.");
+
+    const match = bookings.find((b) => b && String(b.bookId || "") === bookId && String(b.eid || "") === eid);
+    if (match) {
+      if (!match.fromDate || !match.toDate) throw new Error("Incomplete LibCal reservation details.");
+      return {
+        bookId,
+        podName: INCIDENT_PODS.get(eid),
+        patronName: extractPatronName(match),
+        libraryCard: extractPatronCard(match),
+        reservationTime: nyReservationRange(match.fromDate, match.toDate),
+      };
+    }
+    if (bookings.length < 500) break;
+  }
+  return null;
+}
+
+async function deliverIncidentEmail(report) {
+  const recipients = emailRecipients();
+  const config = incidentMailerConfig();
+  const payloadString = JSON.stringify({
+    ...report,
+    recipients,
+    issuedAt: Date.now(),
+  });
+  const signature = crypto
+    .createHmac("sha256", config.secret)
+    .update(payloadString, "utf8")
+    .digest("hex");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: JSON.stringify({ payload: payloadString, signature }),
+      signal: controller.signal,
+      redirect: "follow",
+    });
+    if (!response.ok) throw new Error(`Email service HTTP ${response.status}`);
+    const result = await response.json().catch(() => null);
+    if (!result || result.ok !== true || result.reference !== report.reference) {
+      throw new Error("Email service did not confirm sending the report.");
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+app.post("/api/incident-report", async (req, res) => {
+  try {
+    const body = req.body || {};
+    const kind = stringField(body.kind, 15);
+    const podId = stringField(body.podId, 12);
+    const incidentType = stringField(body.incidentType, 80);
+    const description = stringField(body.description, 4000);
+    const actionType = stringField(body.actionType, 80);
+    const actionDetails = stringField(body.actionDetails || "", 1500);
+    const incidentIso = stringField(body.incidentAt, 40);
+    const reference = stringField(body.reference, 90);
+
+    if (!reference || !/^[a-zA-Z0-9-]{12,90}$/.test(reference)) {
+      return res.status(400).json({ ok: false, error: "Invalid incident reference." });
+    }
+    if (!INCIDENT_PODS.has(podId) || (kind === "linked" && podId === "multiple")) {
+      return res.status(400).json({ ok: false, error: "Select a valid study pod." });
+    }
+    if (!INCIDENT_TYPES.has(incidentType) || !description || description.length < 10 || !ACTION_TYPES.has(actionType) || actionDetails === null) {
+      return res.status(400).json({ ok: false, error: "Complete all required incident fields." });
+    }
+    const incidentDate = new Date(incidentIso || "");
+    if (!Number.isFinite(incidentDate.getTime()) ||
+        incidentDate.getTime() > Date.now() + 10 * 60 * 1000 ||
+        incidentDate.getTime() < new Date("2015-01-01T00:00:00Z").getTime()) {
+      return res.status(400).json({ ok: false, error: "Enter a valid incident date/time (not in the future)." });
+    }
+    if (kind !== "linked" && kind !== "general") {
+      return res.status(400).json({ ok: false, error: "Invalid incident report type." });
+    }
+
+    let reservation = null;
+    if (kind === "linked") {
+      const bookId = stringField(body.bookId, 100);
+      const fromDate = stringField(body.fromDate, 50);
+      if (!bookId || !fromDate) {
+        return res.status(400).json({ ok: false, error: "Missing linked reservation reference." });
+      }
+      reservation = await verifyIncidentReservation({ bookId, eid: podId, fromDate });
+      if (!reservation) {
+        return res.status(404).json({
+          ok: false,
+          error: "Couldn't verify the reservation in LibCal. Use General Incident if this is an older or unavailable booking.",
+        });
+      }
+    } else {
+      const patronName = stringField(body.patronName || "", 150);
+      const libraryCard = stringField(body.libraryCard || "", 40);
+      if (patronName === null || libraryCard === null) {
+        return res.status(400).json({ ok: false, error: "Patron details exceed allowed length." });
+      }
+      reservation = {
+        bookId: "",
+        podName: INCIDENT_PODS.get(podId),
+        patronName, libraryCard,
+        reservationTime: "Not linked to a reservation",
+      };
+    }
+
+    const submittedAt = new Date().toISOString();
+    const report = {
+      reference,
+      kind,
+      podName: reservation.podName,
+      bookingId: reservation.bookId,
+      patronName: reservation.patronName,
+      libraryCard: reservation.libraryCard,
+      reservationTime: reservation.reservationTime,
+      incidentType,
+      incidentAt: nyDateTime(incidentDate.toISOString()),
+      submittedAt: nyDateTime(submittedAt),
+      reportedBy: req.session.user.email,
+      description,
+      actionType,
+      actionDetails,
+    };
+    await deliverIncidentEmail(report);
+    // Intentionally log only the unique report reference. Never log patron PII.
+    console.log("POD INCIDENT REPORT ACCEPTED", { reference });
+    return res.json({ ok: true, reference, message: "Incident email accepted for sending to both recipients." });
+  } catch (error) {
+    // Generic failure to avoid potentially revealing patron information in logs.
+    console.error("Incident report delivery failed:", error.name || "Error");
+    return res.status(502).json({
+      ok: false,
+      error: "Incident report could not be emailed. No confirmation was received. Retry the same form or contact a supervisor.",
+    });
+  }
 });
 
 app.listen(port, () => {
