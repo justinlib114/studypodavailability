@@ -37,6 +37,13 @@ const POD_ALERT_TTL_MS = 60 * 1000;
 // In-memory records reset if Render restarts or redeploys the service.
 const podAlertHistory = new Map();
 const LIBRARY_TIME_ZONE = "America/New_York";
+// External history is stored in a private Google Sheet by the existing
+// signed Google Apps Script service. The in-memory map is a fallback only.
+const CHIME_HISTORY_NAMESPACE = String(
+  process.env.POD_CHIME_HISTORY_NAMESPACE || "production"
+).trim();
+let chimeSheetCache = { date: "", timestamp: 0, rows: [] };
+let chimeSheetInFlight = null;
 
 function getLibraryDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-US", {
@@ -53,6 +60,107 @@ function pruneOldPodAlertHistory(today) {
   for (const [eid, record] of podAlertHistory.entries()) {
     if (record.date !== today) podAlertHistory.delete(eid);
   }
+}
+
+/* ============================
+   Persistent chime history via Google Apps Script + Sheets
+   Uses the existing POD_INCIDENT_SCRIPT_URL and shared HMAC secret.
+   No patron or reservation data is transmitted.
+============================ */
+async function signedChimeHistoryRequest(payload) {
+  const crypto = require("node:crypto");
+  const config = incidentMailerConfig();
+  const payloadString = JSON.stringify({
+    ...payload,
+    namespace: CHIME_HISTORY_NAMESPACE,
+    issuedAt: Date.now(),
+  });
+  const signature = crypto.createHmac("sha256", config.secret)
+    .update(payloadString, "utf8").digest("hex");
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  try {
+    const response = await fetch(config.url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: JSON.stringify({ payload: payloadString, signature }),
+      redirect: "follow",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`Chime history service HTTP ${response.status}`);
+    const value = await response.json();
+    if (!value || value.ok !== true || value.action !== payload.action) {
+      throw new Error("Chime history service did not confirm the request");
+    }
+    return value;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function saveChimeToSheet(alert, sentBy) {
+  const date = getLibraryDateKey(new Date(alert.createdAt));
+  const result = await signedChimeHistoryRequest({
+    action: "chime-write",
+    date,
+    eid: alert.eid,
+    id: alert.id,
+    createdAt: alert.createdAt,
+    sentBy,
+  });
+  if (result.id !== alert.id) throw new Error("Chime save acknowledgment mismatched");
+  // Invalidate cached cloud history after successful write.
+  chimeSheetCache.timestamp = 0;
+  return true;
+}
+
+async function getChimesFromSheet(date) {
+  const ageMs = Date.now() - chimeSheetCache.timestamp;
+  if (chimeSheetCache.date === date && ageMs < 20000) {
+    return chimeSheetCache.rows;
+  }
+  if (!chimeSheetInFlight) {
+    chimeSheetInFlight = signedChimeHistoryRequest({
+      action: "chime-read",
+      date,
+    }).then((result) => {
+      if (!Array.isArray(result.rows)) throw new Error("Invalid chime history rows");
+      const rows = result.rows.filter((row) =>
+        row && /^\d+$/.test(String(row.eid || "")) &&
+        typeof row.id === "string" && typeof row.createdAt === "string" &&
+        Number.isFinite(Date.parse(row.createdAt))
+      );
+      chimeSheetCache = { date, timestamp: Date.now(), rows };
+      return rows;
+    }).finally(() => { chimeSheetInFlight = null; });
+  }
+  return chimeSheetInFlight;
+}
+
+function buildChimeHistoryResponse(today, sheetRows) {
+  const byPod = new Map();
+  function insert(eid, item) {
+    if (!byPod.has(eid)) byPod.set(eid, new Map());
+    const map = byPod.get(eid);
+    // Deduplicate across Render's memory and the Google Sheet.
+    map.set(String(item.id), String(item.createdAt));
+  }
+  for (const [eid, record] of podAlertHistory.entries()) {
+    if (record.date === today) {
+      for (const item of record.alerts) insert(eid, item);
+    }
+  }
+  for (const row of sheetRows) {
+    if (getLibraryDateKey(new Date(row.createdAt)) === today) {
+      insert(String(row.eid), row);
+    }
+  }
+  const pods = {};
+  for (const [eid, entries] of byPod.entries()) {
+    const times = [...entries.values()].sort((a, b) => Date.parse(b) - Date.parse(a));
+    pods[eid] = { count: times.length, sentAt: times };
+  }
+  return { ok: true, date: today, timeZone: LIBRARY_TIME_ZONE, pods };
 }
 
 /* ============================
@@ -557,7 +665,7 @@ app.post("/api/reservation-action", async (req, res) => {
 /* ============================
    API: manual pod overtime alert
 ============================ */
-app.post("/api/pod-alert", (req, res) => {
+app.post("/api/pod-alert", async (req, res) => {
   try {
     const eid = String(req.body.eid || "").trim();
     const podName = String(req.body.podName || "").trim();
@@ -594,10 +702,24 @@ app.post("/api/pod-alert", (req, res) => {
     const sentBy = req.session?.user?.email || "unknown";
     console.log("POD OVERTIME ALERT", { ...alert, sentBy });
 
+    // Tablet delivery is already queued before this storage call.
+    // A temporary Sheets outage must not stop the chime itself.
+    let historySaved = false;
+    try {
+      historySaved = await saveChimeToSheet(alert, sentBy);
+    } catch (error) {
+      console.error("POD CHIME HISTORY SAVE FAILED", {
+        eid,
+        id: alert.id,
+        error: error.name || "Error",
+      });
+    }
+
     res.set("Cache-Control", "no-store");
     res.json({
       ok: true,
       alert,
+      historySaved,
     });
   } catch (e) {
     console.error("Pod overtime alert error:", e);
@@ -612,21 +734,23 @@ app.post("/api/pod-alert", (req, res) => {
 // Staff-only, read-only counts and timestamps for the current library day.
 // This route deliberately does not match the unauthenticated tablet polling
 // exception in staff-auth.js, so it still requires a staff Google login.
-app.get("/api/pod-alert-history", (req, res) => {
+app.get("/api/pod-alert-history", async (req, res) => {
   const today = getLibraryDateKey();
   pruneOldPodAlertHistory(today);
-
-  const pods = {};
-  for (const [eid, history] of podAlertHistory.entries()) {
-    pods[eid] = {
-      count: history.alerts.length,
-      // Most recent first, for a compact collapsible list.
-      sentAt: history.alerts.map((item) => item.createdAt).reverse(),
-    };
+  let rows = [];
+  let historySource = "google-sheets";
+  try {
+    rows = await getChimesFromSheet(today);
+  } catch (error) {
+    historySource = "memory-fallback";
+    console.error("POD CHIME HISTORY LOAD FAILED", error.name || "Error");
   }
 
   res.set("Cache-Control", "no-store");
-  res.json({ ok: true, date: today, timeZone: LIBRARY_TIME_ZONE, pods });
+  res.json({
+    ...buildChimeHistoryResponse(today, rows),
+    historySource,
+  });
 });
 
 app.get("/api/pod-alert/:eid", (req, res) => {
