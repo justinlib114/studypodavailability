@@ -17,6 +17,10 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+
+// Google Workspace authentication
+require("./staff-auth")(app);
+
 app.use(express.static("public"));
 
 const MAX_RANGE_DAYS = 31;
@@ -27,6 +31,29 @@ const MAX_RANGE_DAYS = 31;
 const podAlerts = new Map();
 let podAlertSequence = 0;
 const POD_ALERT_TTL_MS = 60 * 1000;
+
+// Today's sent-alert history is shared by all staff dashboards connected to
+// this Render process. It is distinct from the 60-second tablet alert queue.
+// In-memory records reset if Render restarts or redeploys the service.
+const podAlertHistory = new Map();
+const LIBRARY_TIME_ZONE = "America/New_York";
+
+function getLibraryDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: LIBRARY_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function pruneOldPodAlertHistory(today) {
+  for (const [eid, record] of podAlertHistory.entries()) {
+    if (record.date !== today) podAlertHistory.delete(eid);
+  }
+}
 
 /* ============================
    Helpers
@@ -551,7 +578,25 @@ app.post("/api/pod-alert", (req, res) => {
 
     podAlerts.set(eid, alert);
 
-    console.log("POD OVERTIME ALERT", alert);
+    // Record every successfully created alert, even when staff trigger the
+    // same pod repeatedly. The tablet queue itself still keeps only the latest.
+    const today = getLibraryDateKey(new Date(alert.createdAt));
+    pruneOldPodAlertHistory(today);
+    let history = podAlertHistory.get(eid);
+    if (!history) {
+      history = { date: today, alerts: [] };
+      podAlertHistory.set(eid, history);
+    }
+    history.alerts.push({ id: alert.id, createdAt: alert.createdAt });
+
+   
+const sentBy = req.session?.user?.email || "unknown";
+
+console.log("POD OVERTIME ALERT", {
+  ...alert,
+  sentBy
+});
+
 
     res.set("Cache-Control", "no-store");
     res.json({
@@ -566,6 +611,26 @@ app.post("/api/pod-alert", (req, res) => {
       detail: String(e.message || e),
     });
   }
+});
+
+// Staff-only, read-only counts and timestamps for the current library day.
+// This route deliberately does not match the unauthenticated tablet polling
+// exception in staff-auth.js, so it still requires a staff Google login.
+app.get("/api/pod-alert-history", (req, res) => {
+  const today = getLibraryDateKey();
+  pruneOldPodAlertHistory(today);
+
+  const pods = {};
+  for (const [eid, history] of podAlertHistory.entries()) {
+    pods[eid] = {
+      count: history.alerts.length,
+      // Most recent first, for a compact collapsible list.
+      sentAt: history.alerts.map((item) => item.createdAt).reverse(),
+    };
+  }
+
+  res.set("Cache-Control", "no-store");
+  res.json({ ok: true, date: today, timeZone: LIBRARY_TIME_ZONE, pods });
 });
 
 app.get("/api/pod-alert/:eid", (req, res) => {
