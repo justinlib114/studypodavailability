@@ -589,7 +589,14 @@ app.post("/api/pod-alert", (req, res) => {
     }
     history.alerts.push({ id: alert.id, createdAt: alert.createdAt });
 
-    console.log("POD OVERTIME ALERT", alert);
+   
+const sentBy = req.session?.user?.email || "unknown";
+
+console.log("POD OVERTIME ALERT", {
+  ...alert,
+  sentBy
+});
+
 
     res.set("Cache-Control", "no-store");
     res.json({
