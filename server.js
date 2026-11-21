@@ -684,6 +684,7 @@ const INCIDENT_TYPES = new Set([
   "Consecutive reservation violation",
   "Food or drink violation",
   "Key not returned",
+  "Items of Value Left Behind",
   "Disruptive behavior",
   "Equipment damage",
   "Other",
