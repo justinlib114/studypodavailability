@@ -338,6 +338,60 @@ function wireActionButtons() {
 }
 
 
+// Update the compact history under every pod's chime button.
+// The server is the source of truth, so multiple staff computers see the
+// same counts after refreshing. This does not affect the tablet polling API.
+function formatChimeSentTime(iso) {
+  const date = new Date(iso);
+  if (!Number.isFinite(date.getTime())) return "Unknown time";
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+
+async function refreshPodAlertHistory() {
+  try {
+    const response = await fetch(`/api/pod-alert-history?_ts=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    if (!data.ok) throw new Error("Alert history unavailable");
+
+    document.querySelectorAll(".pod-alert-history").forEach((details) => {
+      const eid = details.dataset.eid;
+      const entries = data.pods?.[eid]?.sentAt || [];
+      const count = data.pods?.[eid]?.count || 0;
+      const summary = details.querySelector("summary");
+      const list = details.querySelector(".pod-alert-history-list");
+      summary.textContent = `Sent today: ${count}`;
+      list.replaceChildren();
+
+      if (entries.length === 0) {
+        const item = document.createElement("li");
+        item.textContent = "No overtime chimes sent today.";
+        list.appendChild(item);
+      } else {
+        entries.forEach((sentAt) => {
+          const item = document.createElement("li");
+          item.textContent = `Sent at ${formatChimeSentTime(sentAt)}`;
+          list.appendChild(item);
+        });
+      }
+    });
+  } catch (error) {
+    // Keep reservations and the chime button working even if history fails.
+    console.warn("Overtime chime history unavailable:", error.message);
+    document.querySelectorAll(".pod-alert-history summary").forEach((summary) => {
+      summary.textContent = "History unavailable";
+    });
+  }
+}
+
 async function sendPodOvertimeAlert(button) {
   const eid = button.dataset.eid || "";
   const podName = button.dataset.podName || "";
@@ -373,6 +427,8 @@ async function sendPodOvertimeAlert(button) {
 
     button.textContent = "Sent ✓";
     showMessage(`Overtime alert sent to ${podName || "pod"}.`, "success");
+    // Display the updated count immediately, without refreshing the table.
+    refreshPodAlertHistory();
 
     setTimeout(() => {
       button.textContent = originalText;
@@ -407,6 +463,12 @@ async function loadData() {
 
   const start = startEl?.value || ymdToday();
   const end = endEl?.value || start;
+
+  // Preserve each expanded history while the dashboard auto-refreshes.
+  const expandedHistories = new Set(
+    Array.from(tbody.querySelectorAll(".pod-alert-history[open]"),
+      (details) => details.dataset.eid)
+  );
 
   tbody.innerHTML = `<tr><td colspan="6" class="muted">Loading…</td></tr>`;
 
@@ -462,6 +524,15 @@ async function loadData() {
               data-pod-name="${escapeHtml(p.name || "")}">
               🔔 Overtime Chime
             </button>
+            <details
+              class="pod-alert-history"
+              data-eid="${escapeHtml(p.eid || "")}" 
+              ${expandedHistories.has(String(p.eid)) ? "open" : ""}>
+              <summary>Sent today: …</summary>
+              <ol class="pod-alert-history-list">
+                <li>Loading history…</li>
+              </ol>
+            </details>
           </td>
         </tr>
       `)
@@ -470,6 +541,7 @@ async function loadData() {
     wireActionButtons();
     wireOvertimeAlertButtons();
     renderCountdown();
+    await refreshPodAlertHistory();
 
     countdownTimer = setInterval(renderCountdown, 30000);
     autoRefreshTimer = setTimeout(loadData, 60000);
