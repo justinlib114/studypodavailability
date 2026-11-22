@@ -698,15 +698,21 @@ async function loadData() {
     wireIncidentLinkedButtons();
     wireOvertimeAlertButtons();
     renderCountdown();
-    await refreshPodAlertHistory();
+
+    // Load chime history independently; Google Sheets must not delay the
+    // next reservation refresh. Chime errors are handled inside this function.
+    void refreshPodAlertHistory();
 
     countdownTimer = setInterval(renderCountdown, 30000);
-    autoRefreshTimer = setTimeout(loadData, 60000);
   } catch (e) {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`;
   } finally {
     setBusyState(false);
+
+    // Always schedule the next reservation refresh, even if LibCal returned
+    // an error or no pods. This timer does not wait for chime history.
+    autoRefreshTimer = setTimeout(loadData, 60000);
   }
 }
 
