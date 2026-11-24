@@ -26,6 +26,7 @@
       </label>
 
       <button id="refresh" type="button">Refresh</button>
+      <button id="incident-general-button" type="button" class="btn-general-incident">Document General Incident</button>
     </div>
   </header>
 
@@ -48,6 +49,68 @@
       </tbody>
     </table>
   </main>
+
+
+  <!-- Staff incident reporting dialog; no data leaves until submission. -->
+  <dialog id="incident-dialog" class="incident-dialog" aria-labelledby="incident-dialog-title">
+    <form id="incident-form">
+      <h2 id="incident-dialog-title">Document Incident</h2>
+      <p class="incident-note">Reports are emailed to designated staff. The incident date/time may differ from the time this report is submitted.</p>
+
+      <section id="incident-linked-fields" hidden aria-label="Linked LibCal reservation">
+        <h3>Reservation details (verified with LibCal on submission)</h3>
+        <dl class="incident-reservation-details">
+          <dt>Study pod</dt><dd id="incident-linked-pod"></dd>
+          <dt>Patron</dt><dd id="incident-linked-name"></dd>
+          <dt>Library card</dt><dd id="incident-linked-card"></dd>
+          <dt>Booking ID</dt><dd id="incident-linked-book"></dd>
+          <dt>Reservation</dt><dd id="incident-linked-time"></dd>
+        </dl>
+      </section>
+
+      <section id="incident-general-fields" aria-label="Manual incident details">
+        <label for="incident-pod-id">Study Pod</label>
+        <select id="incident-pod-id"></select>
+        <label for="incident-patron-name">Patron name (optional)</label>
+        <input id="incident-patron-name" type="text" maxlength="150" autocomplete="off">
+        <label for="incident-library-card">Library card number (optional)</label>
+        <input id="incident-library-card" type="text" maxlength="40" autocomplete="off">
+      </section>
+
+      <label for="incident-at">Incident date and time <span aria-hidden="true">*</span></label>
+      <input id="incident-at" type="datetime-local" required>
+      <label for="incident-type">Incident type <span aria-hidden="true">*</span></label>
+      <select id="incident-type" required>
+        <option value="Overstayed reservation">Overstayed reservation</option>
+        <option value="Consecutive reservation violation">Consecutive reservation violation</option>
+        <option value="Food or drink violation">Food or drink violation</option>
+        <option value="Key not returned">Key not returned</option>
+        <option value="Items of Value Left Behind">Items of Value Left Behind</option>
+        <option value="Disruptive behavior">Disruptive behavior</option>
+        <option value="Equipment damage">Equipment damage</option>
+        <option value="Other">Other</option>
+      </select>
+      <label for="incident-description">Incident description <span aria-hidden="true">*</span></label>
+      <textarea id="incident-description" required minlength="10" maxlength="4000" rows="5" placeholder="Describe what occurred, including relevant times, interactions, and factual observations."></textarea>
+      <label for="incident-action">Action taken <span aria-hidden="true">*</span></label>
+      <select id="incident-action" required>
+        <option value="Verbal reminder given">Verbal reminder given</option>
+        <option value="Written warning issued">Written warning issued</option>
+        <option value="Staff intervention required">Staff intervention required</option>
+        <option value="Referred to supervisor">Referred to supervisor</option>
+        <option value="No action taken">No action taken</option>
+        <option value="Other / follow-up required">Other / follow-up required</option>
+      </select>
+      <label for="incident-action-details">Action details / follow-up (optional)</label>
+      <textarea id="incident-action-details" maxlength="1500" rows="2"></textarea>
+      <p id="incident-feedback" class="incident-feedback" aria-live="polite"></p>
+      <div class="incident-dialog-buttons">
+        <button id="incident-cancel" type="button">Cancel</button>
+        <button id="incident-submit" type="submit" class="btn-general-incident">Email Incident Report</button>
+      </div>
+      <p class="incident-note">The submitting staff member and submission time are attached automatically. Patron details are included only in the email body, not in the subject or Render logs.</p>
+    </form>
+  </dialog>
 
   <script src="/dashboard.js"></script>
 </body>

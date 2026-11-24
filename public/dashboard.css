@@ -250,3 +250,76 @@ button:disabled {
 .pod-alert-history-list li + li {
   margin-top: 3px;
 }
+
+
+/* Staff-only incident reporting */
+.btn-general-incident {
+  color: #fff;
+  background: #184e77;
+  border: 1px solid #184e77;
+  border-radius: 6px;
+  font-weight: 700;
+}
+.btn-general-incident:hover { background: #103a5c; }
+.btn-incident-linked {
+  background: #fff;
+  color: #184e77;
+  border: 1px solid #184e77;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.incident-reservation-link { margin-top: 8px; }
+.incident-dialog {
+  width: min(630px, calc(100% - 20px));
+  max-height: 87vh;
+  overflow-y: auto;
+  border: 1px solid #aaa;
+  border-radius: 10px;
+  padding: 20px;
+  box-sizing: border-box;
+  box-shadow: 0 12px 50px #0005;
+}
+.incident-dialog::backdrop { background: #0009; }
+.incident-dialog h2 { margin: 0 0 10px; font-size: 20px; }
+.incident-dialog h3 { margin: 12px 0 8px; font-size: 15px; }
+.incident-dialog label { display: block; font-size: 14px; font-weight: 700; margin: 12px 0 4px; }
+.incident-dialog input,
+.incident-dialog select,
+.incident-dialog textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  font: inherit;
+  border: 1px solid #777;
+  border-radius: 5px;
+  background: #fff;
+  color: #111;
+}
+.incident-dialog button:focus-visible,
+.incident-dialog input:focus-visible,
+.incident-dialog select:focus-visible,
+.incident-dialog textarea:focus-visible,
+.btn-incident-linked:focus-visible,
+.btn-general-incident:focus-visible {
+  outline: 3px solid #166ac4;
+  outline-offset: 2px;
+}
+.incident-note { font-size: 12px; color: #444; line-height: 1.5; }
+.incident-reservation-details {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) 2fr;
+  gap: 7px 10px;
+  font-size: 13px;
+  background: #f4f5f7;
+  padding: 12px;
+}
+.incident-reservation-details dt { font-weight: 700; }
+.incident-reservation-details dd { margin: 0; overflow-wrap: anywhere; }
+.incident-feedback { min-height: 1.4em; font-size: 13px; color: #0a7a33; }
+.incident-feedback.incident-error { color: #b00020; font-weight: 700; }
+.incident-dialog-buttons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+.incident-dialog-buttons button { padding: 9px 14px; }
+/* Explicitly respect HTML hidden regardless of author CSS for section layout. */
+.incident-dialog [hidden] { display: none !important; }

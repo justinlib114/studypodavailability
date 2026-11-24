@@ -1,3 +1,4 @@
+let incidentPods = [];
 let autoRefreshTimer = null;
 let countdownTimer = null;
 
@@ -191,6 +192,7 @@ function renderCurrentReservation(active, podName) {
       ${escapeHtml(renderCheckStatusText(active))}
     </div>
     ${actionButtons(active, podName, "Current Reservation")}
+    ${incidentLinkedButton(active, podName, "active")}
   `;
 }
 
@@ -207,6 +209,7 @@ function renderNextReservation(next, podName) {
       ${escapeHtml(renderCheckStatusText(next))}
     </div>
     ${actionButtons(next, podName, "Next Reservation")}
+    ${incidentLinkedButton(next, podName, "next")}
   `;
 }
 
@@ -227,7 +230,159 @@ function renderLastReservation(last, podName) {
       ${escapeHtml(checkText)}
     </div>
     ${actionButtons(last, podName, "Last Reservation")}
+    ${incidentLinkedButton(last, podName, "last")}
   `;
+}
+
+
+
+/* ==========================================================
+   Staff incident reporting — independent from reservation
+   actions, automatic warnings, and overtime chime controls.
+========================================================= */
+let incidentMode = "general";
+let incidentReference = "";
+
+function incidentLinkedButton(reservation, podName, slot) {
+  if (!reservation?.bookId || !reservation?.fromDate) return "";
+  return `<div class="incident-reservation-link">
+    <button type="button" class="btn-incident-linked"
+      data-incident-slot="${escapeHtml(slot)}"
+      data-incident-eid="${escapeHtml(reservation.eid || "")}">
+      Document Incident
+    </button>
+  </div>`;
+}
+
+function newIncidentReference() {
+  if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+  return `INC-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function incidentLocalDateTime() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}T${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+function populateIncidentPodChoices() {
+  const select = document.getElementById("incident-pod-id");
+  if (!select) return;
+  select.replaceChildren();
+  incidentPods.forEach((p) => {
+    const option = document.createElement("option");
+    option.value = String(p.eid);
+    option.textContent = p.name;
+    select.appendChild(option);
+  });
+  const option = document.createElement("option");
+  option.value = "multiple";
+  option.textContent = "Multiple pods / Other";
+  select.appendChild(option);
+}
+
+function setIncidentFeedback(message, error = false) {
+  const field = document.getElementById("incident-feedback");
+  field.textContent = message || "";
+  field.className = error ? "incident-feedback incident-error" : "incident-feedback";
+}
+
+function openIncidentDialog(kind, pod = null, booking = null) {
+  const dialog = document.getElementById("incident-dialog");
+  const form = document.getElementById("incident-form");
+  if (!dialog || !form) return;
+  form.reset();
+  incidentMode = kind;
+  incidentReference = newIncidentReference();
+  form.dataset.podId = String(pod?.eid || "");
+  form.dataset.bookId = String(booking?.bookId || "");
+  form.dataset.fromDate = String(booking?.fromDate || "");
+  document.getElementById("incident-at").value = incidentLocalDateTime();
+  document.getElementById("incident-general-fields").hidden = kind !== "general";
+  document.getElementById("incident-linked-fields").hidden = kind !== "linked";
+  document.getElementById("incident-dialog-title").textContent = kind === "linked" ? "Document Reservation Incident" : "Document General Incident";
+  setIncidentFeedback("");
+  populateIncidentPodChoices();
+  if (pod?.eid) document.getElementById("incident-pod-id").value = String(pod.eid);
+
+  if (kind === "linked" && pod && booking) {
+    const fields = [
+      ["incident-linked-pod", pod.name],
+      ["incident-linked-name", booking.patron || "Not provided"],
+      ["incident-linked-card", booking.account || "Not provided"],
+      ["incident-linked-book", booking.bookId],
+      ["incident-linked-time", fmtRange(booking.fromDate, booking.toDate)],
+    ];
+    fields.forEach(([id, value]) => { document.getElementById(id).textContent = value; });
+  }
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else { dialog.setAttribute("open", ""); }
+  document.getElementById("incident-at").focus();
+}
+
+function wireIncidentLinkedButtons() {
+  document.querySelectorAll(".btn-incident-linked").forEach((button) => {
+    button.addEventListener("click", () => {
+      const pod = incidentPods.find((p) => String(p.eid) === button.dataset.incidentEid);
+      const slot = button.dataset.incidentSlot;
+      const booking = pod && ["active", "next", "last"].includes(slot) ? pod[slot] : null;
+      if (!booking) return showMessage("Reservation is no longer shown. Refresh the dashboard.", "error");
+      openIncidentDialog("linked", pod, booking);
+    });
+  });
+}
+
+async function submitIncidentReport(event) {
+  event.preventDefault();
+  const form = document.getElementById("incident-form");
+  const submit = document.getElementById("incident-submit");
+  const localValue = document.getElementById("incident-at").value;
+  const date = new Date(localValue);
+  if (!Number.isFinite(date.getTime())) {
+    return setIncidentFeedback("Choose a valid incident date and time.", true);
+  }
+  if (!form.reportValidity()) return;
+
+  const payload = {
+    reference: incidentReference,
+    kind: incidentMode,
+    podId: incidentMode === "linked" ? form.dataset.podId : document.getElementById("incident-pod-id").value,
+    bookId: incidentMode === "linked" ? form.dataset.bookId : "",
+    fromDate: incidentMode === "linked" ? form.dataset.fromDate : "",
+    patronName: incidentMode === "general" ? document.getElementById("incident-patron-name").value : "",
+    libraryCard: incidentMode === "general" ? document.getElementById("incident-library-card").value : "",
+    incidentAt: date.toISOString(),
+    incidentType: document.getElementById("incident-type").value,
+    description: document.getElementById("incident-description").value,
+    actionType: document.getElementById("incident-action").value,
+    actionDetails: document.getElementById("incident-action-details").value,
+  };
+  if (payload.description.trim().length < 10) {
+    return setIncidentFeedback("Enter a description of at least 10 characters.", true);
+  }
+
+  submit.disabled = true;
+  setIncidentFeedback("Sending incident report…");
+  try {
+    const response = await fetch("/api/incident-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
+      body: JSON.stringify(payload),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.ok) throw new Error(result.error || "Could not submit incident report.");
+    document.getElementById("incident-dialog").close();
+    showMessage(`Incident report emailed to designated recipients. Reference: ${result.reference}`, "success");
+  } catch (error) {
+    setIncidentFeedback(error.message || "Incident report failed.", true);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function initIncidentReporting() {
+  document.getElementById("incident-general-button").addEventListener("click", () => openIncidentDialog("general"));
+  document.getElementById("incident-cancel").addEventListener("click", () => document.getElementById("incident-dialog").close());
+  document.getElementById("incident-form").addEventListener("submit", submitIncidentReport);
 }
 
 function showMessage(message, type = "info") {
@@ -499,6 +654,7 @@ async function loadData() {
     }
 
     const data = await r.json();
+    incidentPods = Array.isArray(data.results) ? data.results : [];
     const updated = new Date(data.now).toLocaleString();
 
     meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
@@ -539,17 +695,24 @@ async function loadData() {
       .join("");
 
     wireActionButtons();
+    wireIncidentLinkedButtons();
     wireOvertimeAlertButtons();
     renderCountdown();
-    await refreshPodAlertHistory();
+
+    // Load chime history independently; Google Sheets must not delay the
+    // next reservation refresh. Chime errors are handled inside this function.
+    void refreshPodAlertHistory();
 
     countdownTimer = setInterval(renderCountdown, 30000);
-    autoRefreshTimer = setTimeout(loadData, 60000);
   } catch (e) {
     meta.textContent = "—";
     tbody.innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`;
   } finally {
     setBusyState(false);
+
+    // Always schedule the next reservation refresh, even if LibCal returned
+    // an error or no pods. This timer does not wait for chime history.
+    autoRefreshTimer = setTimeout(loadData, 60000);
   }
 }
 
@@ -564,3 +727,5 @@ window.addEventListener("DOMContentLoaded", loadData);
   if (startEl && !startEl.value) startEl.value = today;
   if (endEl && !endEl.value) endEl.value = today;
 })();
+
+window.addEventListener("DOMContentLoaded", initIncidentReporting);
