@@ -2,6 +2,17 @@ let incidentPods = [];
 let autoRefreshTimer = null;
 let countdownTimer = null;
 
+// Poll for new LibCal bookings 20 seconds after each completed request.
+// Keeping the timer completion-based prevents automatic requests overlapping.
+const RESERVATION_REFRESH_MS = 20_000;
+const CHIME_HISTORY_REFRESH_MS = 60_000;
+let reservationRefreshInProgress = false;
+let reservationRefreshQueued = false;
+let hasLoadedReservations = false;
+let cachedChimeHistory = null;
+let chimeHistoryLoadedAt = 0;
+let chimeHistoryInFlight = null;
+
 function ymdToday() {
   const d = new Date();
   const yyyy = d.getFullYear();
@@ -508,42 +519,81 @@ function formatChimeSentTime(iso) {
   }).format(date);
 }
 
-async function refreshPodAlertHistory() {
-  try {
-    const response = await fetch(`/api/pod-alert-history?_ts=${Date.now()}`, {
-      cache: "no-store",
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    if (!data.ok) throw new Error("Alert history unavailable");
+// Repaint the chime summaries immediately from the last successful read.
+// This keeps their counts visible when reservations update more frequently.
+function renderPodAlertHistory(data) {
+  document.querySelectorAll(".pod-alert-history").forEach((details) => {
+    const eid = details.dataset.eid;
+    const entries = data.pods?.[eid]?.sentAt || [];
+    const count = data.pods?.[eid]?.count || 0;
+    const summary = details.querySelector("summary");
+    const list = details.querySelector(".pod-alert-history-list");
+    summary.textContent = `Sent today: ${count}`;
+    list.replaceChildren();
 
-    document.querySelectorAll(".pod-alert-history").forEach((details) => {
-      const eid = details.dataset.eid;
-      const entries = data.pods?.[eid]?.sentAt || [];
-      const count = data.pods?.[eid]?.count || 0;
-      const summary = details.querySelector("summary");
-      const list = details.querySelector(".pod-alert-history-list");
-      summary.textContent = `Sent today: ${count}`;
-      list.replaceChildren();
-
-      if (entries.length === 0) {
+    if (entries.length === 0) {
+      const item = document.createElement("li");
+      item.textContent = "No overtime chimes sent today.";
+      list.appendChild(item);
+    } else {
+      entries.forEach((sentAt) => {
         const item = document.createElement("li");
-        item.textContent = "No overtime chimes sent today.";
+        item.textContent = `Sent at ${formatChimeSentTime(sentAt)}`;
         list.appendChild(item);
-      } else {
-        entries.forEach((sentAt) => {
-          const item = document.createElement("li");
-          item.textContent = `Sent at ${formatChimeSentTime(sentAt)}`;
-          list.appendChild(item);
+      });
+    }
+  });
+}
+
+async function refreshPodAlertHistory(force = false) {
+  // A history snapshot from yesterday must not appear in today's dashboard.
+  if (cachedChimeHistory && cachedChimeHistory.date !== ymdToday()) {
+    cachedChimeHistory = null;
+    chimeHistoryLoadedAt = 0;
+  }
+
+  if (cachedChimeHistory) renderPodAlertHistory(cachedChimeHistory);
+
+  // Reservation updates every 20 seconds; don't also query Google Sheets
+  // every 20 seconds. Keep the existing ~1-minute history update cadence.
+  if (!force && cachedChimeHistory &&
+      Date.now() - chimeHistoryLoadedAt < CHIME_HISTORY_REFRESH_MS) {
+    return;
+  }
+
+  if (chimeHistoryInFlight) {
+    if (!force) return chimeHistoryInFlight;
+    // A newly sent chime requires a fresh read after any earlier read ends.
+    await chimeHistoryInFlight;
+  }
+
+  const request = (async () => {
+    try {
+      const response = await fetch(`/api/pod-alert-history?_ts=${Date.now()}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (!data.ok) throw new Error("Alert history unavailable");
+
+      cachedChimeHistory = data;
+      chimeHistoryLoadedAt = Date.now();
+      renderPodAlertHistory(data);
+    } catch (error) {
+      // An occasional Sheets error must not affect LibCal reservations.
+      console.warn("Overtime chime history unavailable:", error.message);
+      if (!cachedChimeHistory) {
+        document.querySelectorAll(".pod-alert-history summary").forEach((summary) => {
+          summary.textContent = "History unavailable";
         });
       }
-    });
-  } catch (error) {
-    // Keep reservations and the chime button working even if history fails.
-    console.warn("Overtime chime history unavailable:", error.message);
-    document.querySelectorAll(".pod-alert-history summary").forEach((summary) => {
-      summary.textContent = "History unavailable";
-    });
+    }
+  })();
+  chimeHistoryInFlight = request;
+  try {
+    await request;
+  } finally {
+    if (chimeHistoryInFlight === request) chimeHistoryInFlight = null;
   }
 }
 
@@ -583,7 +633,7 @@ async function sendPodOvertimeAlert(button) {
     button.textContent = "Sent ✓";
     showMessage(`Overtime alert sent to ${podName || "pod"}.`, "success");
     // Display the updated count immediately, without refreshing the table.
-    refreshPodAlertHistory();
+    void refreshPodAlertHistory(true);
 
     setTimeout(() => {
       button.textContent = originalText;
@@ -610,6 +660,13 @@ function wireOvertimeAlertButtons() {
 }
 
 async function loadData() {
+  if (reservationRefreshInProgress) {
+    // Honor a manual Refresh click made while an earlier API call is running.
+    reservationRefreshQueued = true;
+    return;
+  }
+  reservationRefreshInProgress = true;
+
   const tbody = document.getElementById("rows");
   const meta = document.getElementById("meta");
 
@@ -625,7 +682,11 @@ async function loadData() {
       (details) => details.dataset.eid)
   );
 
-  tbody.innerHTML = `<tr><td colspan="6" class="muted">Loading…</td></tr>`;
+  // Keep the previous reservation data visible during background polling.
+  // Otherwise the entire table would flash "Loading" every 20 seconds.
+  if (!hasLoadedReservations) {
+    tbody.innerHTML = `<tr><td colspan="6" class="muted">Loading…</td></tr>`;
+  }
 
   clearMessage();
 
@@ -658,6 +719,7 @@ async function loadData() {
     const updated = new Date(data.now).toLocaleString();
 
     meta.textContent = `Range: ${data.range.start} → ${data.range.end} (${data.range.days} day${data.range.days === 1 ? "" : "s"}) | Updated: ${updated}`;
+    hasLoadedReservations = true;
 
     if (!data.results || !data.results.length) {
       tbody.innerHTML = `<tr><td colspan="6" class="muted">No pods returned.</td></tr>`;
@@ -705,14 +767,25 @@ async function loadData() {
 
     countdownTimer = setInterval(renderCountdown, 30000);
   } catch (e) {
-    meta.textContent = "—";
-    tbody.innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`;
+    if (hasLoadedReservations) {
+      // Preserve last-known bookings and their previous Updated timestamp.
+      showMessage(`Reservation refresh failed. Showing last retrieved data: ${e.message}`, "error");
+    } else {
+      meta.textContent = "—";
+      tbody.innerHTML = `<tr><td colspan="6" class="error">${escapeHtml(e.message)}</td></tr>`;
+    }
   } finally {
+    reservationRefreshInProgress = false;
     setBusyState(false);
 
-    // Always schedule the next reservation refresh, even if LibCal returned
-    // an error or no pods. This timer does not wait for chime history.
-    autoRefreshTimer = setTimeout(loadData, 60000);
+    // Manual requests made mid-refresh run immediately afterward. Otherwise
+    // the next automatic API call begins 20 seconds after completion.
+    if (reservationRefreshQueued) {
+      reservationRefreshQueued = false;
+      autoRefreshTimer = setTimeout(loadData, 0);
+    } else {
+      autoRefreshTimer = setTimeout(loadData, RESERVATION_REFRESH_MS);
+    }
   }
 }
 
